@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Menu,
   X,
@@ -93,10 +93,30 @@ const userGroups = [
 
 function App() {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [popup, setPopup] = useState('')
+
+  useEffect(() => {
+    function closeWithEscape(event) {
+      if (event.key === 'Escape') {
+        setPopup('')
+        setMenuOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', closeWithEscape)
+
+    return () => {
+      window.removeEventListener('keydown', closeWithEscape)
+    }
+  }, [])
 
   function showComingSoon(feature) {
-    alert(`${feature} will be developed in the next project phase.`)
+    setPopup(feature)
     setMenuOpen(false)
+  }
+
+  function closePopup() {
+    setPopup('')
   }
 
   return (
@@ -113,7 +133,10 @@ function App() {
             </span>
           </a>
 
-          <nav className={menuOpen ? 'nav-links open' : 'nav-links'}>
+          <nav
+            className={menuOpen ? 'nav-links open' : 'nav-links'}
+            aria-label="Main navigation"
+          >
             <a href="#home" onClick={() => setMenuOpen(false)}>
               Home
             </a>
@@ -150,7 +173,8 @@ function App() {
           <button
             className="menu-button"
             onClick={() => setMenuOpen(!menuOpen)}
-            aria-label="Open navigation menu"
+            aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-expanded={menuOpen}
           >
             {menuOpen ? <X /> : <Menu />}
           </button>
@@ -235,7 +259,9 @@ function App() {
           <div className="container">
             <div className="section-heading">
               <span>Platform capabilities</span>
+
               <h2>Understand agricultural locations more easily</h2>
+
               <p>
                 AgriTerrain AI combines important agricultural and
                 environmental tools in one simple interface.
@@ -291,6 +317,7 @@ function App() {
           <div className="container trust-grid">
             <div>
               <ShieldCheck />
+
               <span>
                 <strong>Free and Reliable</strong>
                 Open-source project tools
@@ -299,6 +326,7 @@ function App() {
 
             <div>
               <ScanLine />
+
               <span>
                 <strong>Visual Detection</strong>
                 Selected-area analysis
@@ -307,6 +335,7 @@ function App() {
 
             <div>
               <SearchCheck />
+
               <span>
                 <strong>Source Focused</strong>
                 Verifiable information
@@ -315,6 +344,7 @@ function App() {
 
             <div>
               <LockKeyhole />
+
               <span>
                 <strong>Secure by Design</strong>
                 Privacy-aware structure
@@ -355,6 +385,47 @@ function App() {
           © 2026 AgriTerrain AI — CSE327 Demo Project
         </div>
       </footer>
+
+      {popup && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={closePopup}
+        >
+          <div
+            className="feature-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              aria-label="Close popup"
+              onClick={closePopup}
+            >
+              <X size={20} />
+            </button>
+
+            <div className="modal-icon">
+              <Sprout size={30} />
+            </div>
+
+            <span className="modal-label">Next development phase</span>
+
+            <h2 id="modal-title">{popup}</h2>
+
+            <p>
+              The {popup.toLowerCase()} feature is planned for the next stage
+              of the AgriTerrain AI project.
+            </p>
+
+            <button className="modal-confirm" onClick={closePopup}>
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </>
   )
 }
