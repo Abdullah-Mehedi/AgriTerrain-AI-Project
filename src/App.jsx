@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Menu,
   X,
@@ -153,27 +154,27 @@ function App() {
               Reports
             </button>
 
-            <button
+            <Link
               className="login-button mobile-login"
-              onClick={() => showComingSoon('Login')}
+              to="/login"
+              onClick={() => setMenuOpen(false)}
             >
               <UserRound size={17} />
               Login
-            </button>
+            </Link>
           </nav>
 
-          <button
-            className="login-button desktop-login"
-            onClick={() => showComingSoon('Login')}
-          >
+          <Link className="login-button desktop-login" to="/login">
             <UserRound size={17} />
             Login
-          </button>
+          </Link>
 
           <button
             className="menu-button"
             onClick={() => setMenuOpen(!menuOpen)}
-            aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-label={
+              menuOpen ? 'Close navigation menu' : 'Open navigation menu'
+            }
             aria-expanded={menuOpen}
           >
             {menuOpen ? <X /> : <Menu />}
