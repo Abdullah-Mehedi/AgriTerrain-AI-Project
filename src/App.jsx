@@ -111,10 +111,6 @@ function App() {
     }
   }, [])
 
-  function showComingSoon(feature) {
-    setPopup(feature)
-    setMenuOpen(false)
-  }
 
   function closePopup() {
     setPopup('')
@@ -142,17 +138,17 @@ function App() {
               Home
             </a>
 
-            <button onClick={() => showComingSoon('Dashboard')}>
+            <Link to="/dashboard" onClick={() => setMenuOpen(false)}>
               Dashboard
-            </button>
+            </Link>
 
-            <button onClick={() => showComingSoon('Satellite Analysis')}>
+            <Link to="/satellite-analysis" onClick={() => setMenuOpen(false)}>
               Satellite Analysis
-            </button>
+            </Link>
 
-            <button onClick={() => showComingSoon('Reports')}>
+            <Link to="/reports" onClick={() => setMenuOpen(false)}>
               Reports
-            </button>
+            </Link>
 
             <Link
               className="login-button mobile-login"
@@ -205,18 +201,18 @@ function App() {
               </p>
 
               <div className="hero-buttons">
-                <button onClick={() => showComingSoon('Satellite Analysis')}>
+                <Link to="/satellite-analysis">
                   <Map size={19} />
                   View Satellite Map
-                </button>
+                </Link>
 
-                <button
+                <Link
                   className="outline-button"
-                  onClick={() => showComingSoon('Dashboard')}
+                  to="/dashboard"
                 >
                   <BarChart3 size={19} />
                   Open Dashboard
-                </button>
+                </Link>
               </div>
             </div>
 

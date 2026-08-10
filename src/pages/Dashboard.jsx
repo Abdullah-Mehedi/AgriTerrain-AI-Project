@@ -1,290 +1,302 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Activity,
-  Clock3,
+  ArrowRight,
+  Bot,
+  CalendarClock,
+  CheckCircle2,
+  CloudRain,
+  CloudSun,
   Droplets,
   FileText,
+  History,
   Home,
-  LayoutDashboard,
   Leaf,
-  LogOut,
+  Lightbulb,
   Map,
+  MessageCircleQuestion,
   Satellite,
-  ShieldCheck,
+  ShieldAlert,
+  Sparkles,
   UserRound,
+  Waves,
+  X,
 } from 'lucide-react'
+import WorkspaceShell from '../components/WorkspaceShell'
 import { useAuth } from '../context/auth-context'
 import './Dashboard.css'
 
+const fallbackAnalysis = {
+  mode: 'empty',
+  counts: { crop: 0, water: 0, building: 0 },
+  coverage: { crop: 0, water: 0, building: 0 },
+  meanModelCertainty: 0,
+  location: 'No satellite analysis saved yet',
+  createdAt: null,
+}
+
+function readStoredData(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key))
+  } catch {
+    return null
+  }
+}
+
+function numeric(value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+
 function Dashboard() {
-  const navigate = useNavigate()
-  const { user, signOut } = useAuth()
-  const [loggingOut, setLoggingOut] = useState(false)
-  const [logoutError, setLogoutError] = useState('')
+  const { user } = useAuth()
+  const [assistantOpen, setAssistantOpen] = useState(false)
 
   const fullName =
-    user?.user_metadata?.full_name ||
-    user?.email?.split('@')[0] ||
-    'User'
+    user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User'
 
-  async function handleLogout() {
-    try {
-      setLoggingOut(true)
-      setLogoutError('')
-      await signOut()
-      navigate('/login', { replace: true })
-    } catch (error) {
-      setLogoutError(error.message || 'Unable to sign out.')
-      setLoggingOut(false)
-    }
+  const analysis = useMemo(
+    () => readStoredData('agriterrain_latest_analysis') || fallbackAnalysis,
+    [],
+  )
+  const weather = useMemo(
+    () => readStoredData('agriterrain_latest_weather'),
+    [],
+  )
+
+  const coverage = {
+    crop: numeric(analysis.coverage?.crop ?? analysis.coverage?.agricultural),
+    water: numeric(analysis.coverage?.water),
+    building: numeric(analysis.coverage?.building ?? analysis.coverage?.built),
   }
+  const coverageOther = Math.max(
+    0,
+    100 - coverage.crop - coverage.water - coverage.building,
+  )
+  const counts = {
+    crop: numeric(analysis.counts?.crop ?? analysis.counts?.fields),
+    water: numeric(analysis.counts?.water ?? analysis.counts?.waterbodies),
+    building: numeric(analysis.counts?.building ?? analysis.counts?.buildings),
+  }
+  const hasAnalysis = analysis.mode === 'ml'
+  const dataLabel = hasAnalysis ? 'Latest AI result' : 'No result yet'
+  const certainty = hasAnalysis
+    ? numeric(analysis.meanModelCertainty ?? analysis.confidence)
+    : 0
 
   return (
-    <main className="dashboard-page">
-      <aside className="dashboard-sidebar">
-        <Link className="dashboard-brand" to="/">
-          <span>
-            <Leaf size={24} />
-          </span>
-
-          <strong>
-            AgriTerrain <b>AI</b>
-          </strong>
+    <WorkspaceShell
+      title={`Welcome back, ${fullName}`}
+      description="Monitor saved land analysis, environmental context, and recent activity."
+      headerActions={
+        <Link className="dashboard-header-cta no-print" to="/satellite-analysis">
+          <Satellite size={16} />
+          New analysis
         </Link>
-
-        <nav className="dashboard-navigation" aria-label="Dashboard navigation">
-          <Link className="active" to="/dashboard">
-            <LayoutDashboard size={19} />
-            Dashboard
+      }
+    >
+      <section className="dashboard-welcome-card">
+        <div>
+          <span className="dashboard-eyebrow">
+            <Sparkles size={14} />
+            Your agricultural command centre
+          </span>
+          <h2>Turn satellite observations into clear, reviewable evidence.</h2>
+          <p>
+            Search a location, draw a focused boundary, run the land-cover model,
+            then keep the result in Reports / History for comparison and PDF reporting.
+          </p>
+          <Link to="/satellite-analysis">
+            Start satellite analysis
+            <ArrowRight size={17} />
           </Link>
-
-          <button type="button" disabled>
-            <Satellite size={19} />
-            Satellite Analysis
-            <small>Soon</small>
-          </button>
-
-          <button type="button" disabled>
-            <FileText size={19} />
-            Reports
-            <small>Soon</small>
-          </button>
-
-          <Link to="/">
-            <Home size={19} />
-            Home Page
-          </Link>
-        </nav>
-
-        <div className="dashboard-account">
-          <div className="dashboard-avatar">
-            <UserRound size={21} />
-          </div>
-
-          <div>
-            <strong>{fullName}</strong>
-            <span>{user?.email}</span>
-          </div>
         </div>
 
-        <button
-          className="dashboard-logout"
-          type="button"
-          onClick={handleLogout}
-          disabled={loggingOut}
-        >
-          <LogOut size={18} />
-          {loggingOut ? 'Signing out...' : 'Sign Out'}
-        </button>
-      </aside>
-
-      <section className="dashboard-main">
-        <header className="dashboard-header">
+        <div className="dashboard-welcome-visual" aria-hidden="true">
+          <span className="visual-orbit visual-orbit-large" />
+          <span className="visual-orbit visual-orbit-small" />
           <div>
-            <span>Authenticated workspace</span>
-            <h1>Welcome, {fullName}</h1>
-            <p>
-              Review your agricultural analysis workspace and account status.
-            </p>
+            <Satellite size={48} />
+            <small>Earth observation</small>
           </div>
-
-          <div className="verified-badge">
-            <ShieldCheck size={18} />
-            Email verified
-          </div>
-        </header>
-
-        {logoutError && (
-          <div className="dashboard-error" role="alert">
-            {logoutError}
-          </div>
-        )}
-
-        <section className="dashboard-stat-grid">
-          <article className="dashboard-stat">
-            <div className="stat-icon stat-green">
-              <Map size={23} />
-            </div>
-
-            <div>
-              <span>Analyzed fields</span>
-              <strong>18</strong>
-              <small>Demonstration data</small>
-            </div>
-          </article>
-
-          <article className="dashboard-stat">
-            <div className="stat-icon stat-blue">
-              <Droplets size={23} />
-            </div>
-
-            <div>
-              <span>Detected ponds</span>
-              <strong>04</strong>
-              <small>Demonstration data</small>
-            </div>
-          </article>
-
-          <article className="dashboard-stat">
-            <div className="stat-icon stat-orange">
-              <Home size={23} />
-            </div>
-
-            <div>
-              <span>Settlement units</span>
-              <strong>27</strong>
-              <small>Demonstration data</small>
-            </div>
-          </article>
-
-          <article className="dashboard-stat">
-            <div className="stat-icon stat-lime">
-              <Activity size={23} />
-            </div>
-
-            <div>
-              <span>Crop health score</span>
-              <strong>82%</strong>
-              <small>Demonstration data</small>
-            </div>
-          </article>
-        </section>
-
-        <section className="dashboard-content-grid">
-          <article className="dashboard-panel">
-            <div className="dashboard-panel-heading">
-              <div>
-                <span>Analysis overview</span>
-                <h2>Land distribution</h2>
-              </div>
-
-              <Satellite size={22} />
-            </div>
-
-            <div className="distribution-list">
-              <div>
-                <div className="distribution-label">
-                  <span>Agricultural land</span>
-                  <strong>62%</strong>
-                </div>
-
-                <div className="distribution-track">
-                  <span style={{ width: '62%' }} />
-                </div>
-              </div>
-
-              <div>
-                <div className="distribution-label">
-                  <span>Waterbody</span>
-                  <strong>14%</strong>
-                </div>
-
-                <div className="distribution-track water-track">
-                  <span style={{ width: '14%' }} />
-                </div>
-              </div>
-
-              <div>
-                <div className="distribution-label">
-                  <span>Settlement</span>
-                  <strong>24%</strong>
-                </div>
-
-                <div className="distribution-track settlement-track">
-                  <span style={{ width: '24%' }} />
-                </div>
-              </div>
-            </div>
-
-            <p className="dashboard-data-note">
-              These values are sample frontend data. Real satellite analysis
-              will replace them during the AI integration phase.
-            </p>
-          </article>
-
-          <article className="dashboard-panel">
-            <div className="dashboard-panel-heading">
-              <div>
-                <span>Account information</span>
-                <h2>Your secure profile</h2>
-              </div>
-
-              <UserRound size={22} />
-            </div>
-
-            <div className="account-details">
-              <div>
-                <span>Full name</span>
-                <strong>{fullName}</strong>
-              </div>
-
-              <div>
-                <span>Email address</span>
-                <strong>{user?.email}</strong>
-              </div>
-
-              <div>
-                <span>Account ID</span>
-                <strong className="account-id">{user?.id}</strong>
-              </div>
-
-              <div>
-                <span>Last sign in</span>
-                <strong>
-                  {user?.last_sign_in_at
-                    ? new Date(user.last_sign_in_at).toLocaleString()
-                    : 'First session'}
-                </strong>
-              </div>
-            </div>
-          </article>
-
-          <article className="dashboard-panel dashboard-activity-panel">
-            <div className="dashboard-panel-heading">
-              <div>
-                <span>Recent activity</span>
-                <h2>Analysis history</h2>
-              </div>
-
-              <Clock3 size={22} />
-            </div>
-
-            <div className="empty-activity">
-              <span>
-                <Satellite size={30} />
-              </span>
-
-              <h3>No completed analyses yet</h3>
-              <p>
-                Your satellite-analysis history will appear here after the
-                analysis module is connected.
-              </p>
-            </div>
-          </article>
-        </section>
+        </div>
       </section>
-    </main>
+
+      <section className="dashboard-stat-grid" aria-label="Latest analysis summary">
+        <article className="dashboard-stat-card">
+          <span className="dashboard-stat-icon stat-icon-green"><Map size={22} /></span>
+          <div><p>Crop regions</p><strong>{counts.crop}</strong><small>{dataLabel}</small></div>
+          <span className="dashboard-stat-change">Agriculture</span>
+        </article>
+        <article className="dashboard-stat-card">
+          <span className="dashboard-stat-icon stat-icon-blue"><Droplets size={22} /></span>
+          <div><p>Water regions</p><strong>{counts.water}</strong><small>{dataLabel}</small></div>
+          <span className="dashboard-stat-change stat-change-blue">Water</span>
+        </article>
+        <article className="dashboard-stat-card">
+          <span className="dashboard-stat-icon stat-icon-orange"><Home size={22} /></span>
+          <div><p>Building regions</p><strong>{counts.building}</strong><small>{dataLabel}</small></div>
+          <span className="dashboard-stat-change stat-change-orange">Settlement</span>
+        </article>
+        <article className="dashboard-stat-card">
+          <span className="dashboard-stat-icon stat-icon-lime"><Activity size={22} /></span>
+          <div><p>Model certainty</p><strong>{hasAnalysis ? `${Math.round(certainty)}%` : '—'}</strong><small>{dataLabel}</small></div>
+          <span className="dashboard-stat-change">Model certainty</span>
+        </article>
+      </section>
+
+      <section className="dashboard-section-heading">
+        <div><span>Tools</span><h2>Quick access</h2></div>
+        <p>Continue analysis, review saved work, or open the built-in guide.</p>
+      </section>
+
+      <section className="dashboard-quick-grid">
+        <Link className="dashboard-quick-card quick-card-featured" to="/satellite-analysis">
+          <span><Satellite size={23} /></span>
+          <div><strong>Satellite analysis</strong><small>Search, draw, and analyze land</small></div>
+          <ArrowRight size={17} />
+        </Link>
+        <Link className="dashboard-quick-card" to="/reports">
+          <span><FileText size={23} /></span>
+          <div><strong>Reports / History</strong><small>Review and export saved analyses</small></div>
+          <ArrowRight size={17} />
+        </Link>
+        <Link className="dashboard-quick-card" to="/reports">
+          <span><Map size={23} /></span>
+          <div><strong>Visited locations</strong><small>Return to previously analysed places</small></div>
+          <ArrowRight size={17} />
+        </Link>
+        <button className="dashboard-quick-card" type="button" onClick={() => setAssistantOpen(true)}>
+          <span><Bot size={23} /></span>
+          <div><strong>AI guide</strong><small>Learn how to use the analysis</small></div>
+          <ArrowRight size={17} />
+        </button>
+        <Link className="dashboard-quick-card" to="/reports">
+          <span><History size={23} /></span>
+          <div><strong>Historical compare</strong><small>Compare saved results for the same place</small></div>
+          <ArrowRight size={17} />
+        </Link>
+        <a className="dashboard-quick-card" href="#recommendations">
+          <span><Lightbulb size={23} /></span>
+          <div><strong>Recommendations</strong><small>Review evidence-based guidance</small></div>
+          <ArrowRight size={17} />
+        </a>
+      </section>
+
+      <section className="dashboard-main-grid">
+        <article className="dashboard-panel dashboard-land-panel">
+          <div className="dashboard-panel-heading">
+            <div>
+              <span>Latest analysis</span>
+              <h2>Land-cover distribution</h2>
+              <p>{analysis.location || fallbackAnalysis.location}</p>
+            </div>
+            <Link to="/satellite-analysis">Open map <ArrowRight size={15} /></Link>
+          </div>
+
+          <div className="dashboard-distribution">
+            <div
+              className="dashboard-donut"
+              style={{
+                background: `conic-gradient(#188b50 0 ${coverage.crop}%, #36a9d6 ${coverage.crop}% ${coverage.crop + coverage.water}%, #e69a45 ${coverage.crop + coverage.water}% ${coverage.crop + coverage.water + coverage.building}%, #d7dfd8 0)`,
+              }}
+            >
+              <div><strong>{hasAnalysis ? `${coverage.crop.toFixed(1)}%` : '—'}</strong><span>Crop cover</span></div>
+            </div>
+
+            <div className="dashboard-legend">
+              {[
+                ['Crop-labelled cover', coverage.crop, 'legend-agriculture'],
+                ['Water-labelled cover', coverage.water, 'legend-water'],
+                ['Building-labelled cover', coverage.building, 'legend-built'],
+                ['Other model classes', coverageOther, 'legend-barren'],
+              ].map(([label, value, className]) => (
+                <div key={label}>
+                  <span className={className} />
+                  <p>{label}</p>
+                  <strong>{hasAnalysis ? `${Number(value).toFixed(1)}%` : '—'}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="dashboard-source-note">
+            <Satellite size={15} />
+            {hasAnalysis
+              ? 'Generated from the latest saved land-cover model result.'
+              : 'No demonstration values are inserted. Run Satellite Analysis to populate this panel.'}
+          </div>
+        </article>
+
+        <article className="dashboard-panel dashboard-condition-panel">
+          <div className="dashboard-panel-heading">
+            <div><span>Environment</span><h2>Current field context</h2><p>{weather?.location || 'No weather location saved'}</p></div>
+            <CloudSun size={22} />
+          </div>
+          <div className="dashboard-condition-grid">
+            <div><span className="condition-icon weather"><CloudSun size={20} /></span><p>Temperature</p><strong>{weather?.temperature != null ? `${Math.round(weather.temperature)}°C` : '—'}</strong><small>{weather ? 'Open-Meteo context' : 'Unavailable'}</small></div>
+            <div><span className="condition-icon rain"><CloudRain size={20} /></span><p>Precipitation</p><strong>{weather?.precipitation != null ? `${weather.precipitation} mm` : '—'}</strong><small>{weather ? 'Current weather' : 'Unavailable'}</small></div>
+            <div><span className="condition-icon flood"><Waves size={20} /></span><p>Flood risk</p><strong>Not assessed</strong><small>Needs dedicated risk data</small></div>
+            <div><span className="condition-icon risk"><ShieldAlert size={20} /></span><p>Drought risk</p><strong>Not assessed</strong><small>Needs historical climate data</small></div>
+          </div>
+        </article>
+
+        <article className="dashboard-panel dashboard-activity-panel">
+          <div className="dashboard-panel-heading">
+            <div><span>Timeline</span><h2>Recent activity</h2><p>Your latest workspace events</p></div>
+            <CalendarClock size={22} />
+          </div>
+          <div className="dashboard-timeline">
+            {hasAnalysis && analysis.createdAt ? (
+              <div><span className="timeline-icon"><Satellite size={17} /></span><div><strong>Satellite analysis completed</strong><p>{analysis.location || 'Selected boundary'}</p><small>{new Date(analysis.createdAt).toLocaleString()}</small></div></div>
+            ) : (
+              <div><span className="timeline-icon"><Satellite size={17} /></span><div><strong>No previous analysis</strong><p>Run Satellite Analysis to create a saved result.</p><small>Waiting for data</small></div></div>
+            )}
+            <div><span className="timeline-icon timeline-account"><UserRound size={17} /></span><div><strong>Secure account session</strong><p>Signed in as {user?.email}</p><small>Supabase authentication</small></div></div>
+          </div>
+        </article>
+
+        <article className="dashboard-panel dashboard-profile-panel">
+          <div className="dashboard-panel-heading">
+            <div><span>Profile</span><h2>Account status</h2><p>Your authenticated workspace identity</p></div>
+            <UserRound size={22} />
+          </div>
+          <dl className="dashboard-profile-list">
+            <div><dt>Full name</dt><dd>{fullName}</dd></div>
+            <div><dt>Email</dt><dd>{user?.email}</dd></div>
+            <div><dt>Email status</dt><dd className="profile-verified"><CheckCircle2 size={14} /> Verified</dd></div>
+            <div><dt>Last sign in</dt><dd>{user?.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleDateString() : 'Current session'}</dd></div>
+          </dl>
+        </article>
+      </section>
+
+      <section className="dashboard-recommendation" id="recommendations">
+        <div className="recommendation-icon"><Lightbulb size={27} /></div>
+        <div>
+          <span>Recommendation summary</span>
+          <h2>{hasAnalysis ? 'Review the latest model output together with its uncertainty.' : 'Run a focused satellite analysis to generate recommendations.'}</h2>
+          <p>
+            The workspace does not invent crop-health, flood-risk, or drought-risk
+            values from an RGB image. NDVI/NDWI requires suitable multispectral bands,
+            while hazard risk needs separate historical and environmental data.
+          </p>
+        </div>
+        <Link to={hasAnalysis ? '/reports' : '/satellite-analysis'}>{hasAnalysis ? 'Open history' : 'Start analysis'} <ArrowRight size={16} /></Link>
+      </section>
+
+      {assistantOpen && (
+        <div className="dashboard-assistant" role="dialog" aria-modal="true" aria-label="AI guide">
+          <button className="assistant-backdrop" type="button" aria-label="Close AI guide" onClick={() => setAssistantOpen(false)} />
+          <section>
+            <header><span><Bot size={20} /></span><div><strong>AgriTerrain Guide</strong><small>Interface assistant</small></div><button type="button" aria-label="Close AI guide" onClick={() => setAssistantOpen(false)}><X size={19} /></button></header>
+            <div className="assistant-message"><MessageCircleQuestion size={18} /><p>Open Satellite Analysis, search a place, choose <strong>Draw boundary</strong>, mark at least three points, finish the boundary, then press <strong>Run real AI detection</strong>.</p></div>
+            <div className="assistant-message assistant-warning"><Leaf size={18} /><p>The dashboard displays saved model results only. Indices and risk indicators remain unavailable until the required data sources are connected.</p></div>
+            <Link to="/satellite-analysis" onClick={() => setAssistantOpen(false)}>Open Satellite Analysis <ArrowRight size={16} /></Link>
+          </section>
+        </div>
+      )}
+    </WorkspaceShell>
   )
 }
 

@@ -10,6 +10,8 @@ import EmailConfirmed from './pages/EmailConfirmed.jsx'
 import ForgotPassword from './pages/ForgotPassword.jsx'
 import Login from './pages/Login.jsx'
 import ResetPassword from './pages/ResetPassword.jsx'
+import Reports from './pages/Reports.jsx'
+import SatelliteAnalysis from './pages/SatelliteAnalysis.jsx'
 import Signup from './pages/Signup.jsx'
 import VerifyEmail from './pages/VerifyEmail.jsx'
 import './index.css'
@@ -47,6 +49,22 @@ createRoot(document.getElementById('root')).render(
             element={
               <ProtectedRoute>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/satellite-analysis"
+            element={
+              <ProtectedRoute>
+                <SatelliteAnalysis />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/reports"
+            element={
+              <ProtectedRoute>
+                <Reports />
               </ProtectedRoute>
             }
           />

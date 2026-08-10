@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+.venv
+__pycache__
+*.pyc
+ml-service/models/
 
 # Editor directories and files
 .vscode/*

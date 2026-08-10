@@ -202,7 +202,8 @@ a {
   margin-top: 28px;
 }
 
-.hero-buttons button {
+.hero-buttons button,
+.hero-buttons a {
   min-height: 50px;
   display: flex;
   align-items: center;
@@ -640,7 +641,8 @@ footer {
     flex-direction: column;
   }
 
-  .hero-buttons button {
+  .hero-buttons button,
+  .hero-buttons a {
     justify-content: center;
   }
 
