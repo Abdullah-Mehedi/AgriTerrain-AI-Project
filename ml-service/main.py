@@ -26,6 +26,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, Field
+from building_footprints import get_building_footprints
 
 
 SERVICE_DIRECTORY = Path(__file__).resolve().parent
@@ -733,6 +734,18 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         )
         for class_key in ("crop", "water", "building")
     }
+
+    try:
+        microsoft_buildings = get_building_footprints(
+            boundary,
+            box,
+            max_features=MAX_FEATURES_PER_CLASS,
+            min_confidence=0.85,
+        )
+        if microsoft_buildings:
+            detections["building"] = microsoft_buildings
+    except Exception as error:
+        print(f"Microsoft building lookup failed: {error}")
 
     selected_pixels = max(int(np.count_nonzero(selected_mask)), 1)
     coverage = {
