@@ -26,3 +26,11 @@ ml-service/models/
 *.njsproj
 *.sln
 *.sw?
+
+ml-service/ftw-baselines/
+
+ml-service/.cache/
+ml-service/main.backup.py
+ml-service/main.hybrid-backup.py
+fix_ftw_patch.py
+integrate_ftw.py

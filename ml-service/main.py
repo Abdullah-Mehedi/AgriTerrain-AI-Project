@@ -27,6 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, Field
 from building_footprints import get_building_footprints
+from field_detector import get_field_boundaries
 
 
 SERVICE_DIRECTORY = Path(__file__).resolve().parent
@@ -36,10 +37,7 @@ MODEL_DIRECTORY = Path(
         str(SERVICE_DIRECTORY / "models" / "openearthmap-effnetb4-fold1"),
     )
 )
-WORLD_IMAGERY_EXPORT = (
-    "https://server.arcgisonline.com/ArcGIS/rest/services/"
-    "World_Imagery/MapServer/export"
-)
+WORLD_IMAGERY_EXPORT = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export"
 IMAGE_SIZE = 512
 MAX_SELECTION_SIDE_METRES = 420.0
 MIN_SELECTION_SIDE_METRES = 20.0
@@ -123,7 +121,7 @@ allowed_origins = [
     origin.strip()
     for origin in os.getenv(
         "FRONTEND_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5300,http://127.0.0.1:5300",
     ).split(",")
     if origin.strip()
 ]
@@ -747,6 +745,17 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     except Exception as error:
         print(f"Microsoft building lookup failed: {error}")
 
+    try:
+        ftw_fields = get_field_boundaries(
+            boundary,
+            box,
+            max_features=MAX_FEATURES_PER_CLASS,
+        )
+        if ftw_fields:
+            detections["crop"] = ftw_fields
+    except Exception as error:
+        print(f"FTW field detection failed: {error}")
+
     selected_pixels = max(int(np.count_nonzero(selected_mask)), 1)
     coverage = {
         class_key: round(
@@ -804,3 +813,5 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
             "Land-cover model trained on the OpenEarthMap benchmark."
         ),
     }
+
+
