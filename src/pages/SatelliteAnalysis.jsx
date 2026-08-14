@@ -5,7 +5,6 @@ import {
   MapContainer,
   Marker,
   Polygon,
-  Rectangle,
   ScaleControl,
   TileLayer,
   Tooltip,
@@ -139,16 +138,6 @@ function MapInteractionController({ locked }) {
   }, [locked, map])
 
   return null
-}
-
-function regionBounds(coordinates) {
-  if (!Array.isArray(coordinates) || !coordinates.length) return null
-  const latitudes = coordinates.map(([latitude]) => Number(latitude))
-  const longitudes = coordinates.map(([, longitude]) => Number(longitude))
-  return [
-    [Math.min(...latitudes), Math.min(...longitudes)],
-    [Math.max(...latitudes), Math.max(...longitudes)],
-  ]
 }
 
 function formatCoverageChange(current, previous) {
@@ -800,20 +789,7 @@ function SatelliteAnalysis() {
                 )}
 
                 {showOverlay && analysis && Object.entries(classDetails).map(([classKey, details]) => (
-                  visibleClasses[classKey] && analysis.detections[classKey].map((region) => {
-                    const cropBounds = classKey === 'crop' ? regionBounds(region.coordinates) : null
-                    if (classKey === 'crop' && cropBounds) {
-                      return (
-                        <Rectangle
-                          key={region.id}
-                          bounds={cropBounds}
-                          pathOptions={{ color: '#ffffff', weight: 1.5, fillOpacity: 0, dashArray: '4 3' }}
-                        >
-                          <Tooltip sticky>{details.singular} · {region.areaM2.toFixed(0)} m² · {region.confidence.toFixed(0)}% model certainty</Tooltip>
-                        </Rectangle>
-                      )
-                    }
-                    return (
+                  visibleClasses[classKey] && analysis.detections[classKey].map((region) => (
                       <Polygon
                         key={region.id}
                         positions={region.coordinates}
@@ -821,8 +797,7 @@ function SatelliteAnalysis() {
                       >
                         <Tooltip sticky>{details.singular} · {region.areaM2.toFixed(0)} m² · {region.confidence.toFixed(0)}% model certainty</Tooltip>
                       </Polygon>
-                    )
-                  })
+                  ))
                 ))}
               </MapContainer>
 

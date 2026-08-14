@@ -27,7 +27,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, Field
 from building_footprints import get_building_footprints
-from field_detector import get_field_boundaries
+from field_detector import (
+    get_field_boundaries,
+    get_sentinel_water_prior,
+    get_visible_field_boundaries,
+)
+from imagery_tiles import fetch_esri_world_imagery
 
 
 SERVICE_DIRECTORY = Path(__file__).resolve().parent
@@ -37,7 +42,6 @@ MODEL_DIRECTORY = Path(
         str(SERVICE_DIRECTORY / "models" / "openearthmap-effnetb4-fold1"),
     )
 )
-WORLD_IMAGERY_EXPORT = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export"
 IMAGE_SIZE = 512
 MAX_SELECTION_SIDE_METRES = 420.0
 MIN_SELECTION_SIDE_METRES = 20.0
@@ -75,7 +79,7 @@ CLASS_SETTINGS = {
         "simplify": 0.006,
     },
     "water": {
-        "minimum_area_m2": 35.0,
+        "minimum_area_m2": 60.0,
         "colour": (37, 142, 211, 180),
         "close_kernel": 3,
         "open_kernel": 3,
@@ -414,32 +418,18 @@ def polygon_area_hectares(boundary: list[tuple[float, float]]) -> float:
 
 
 def fetch_satellite_image(box: dict[str, float]) -> Image.Image:
-    parameters = {
-        "bbox": f'{box["west"]},{box["south"]},{box["east"]},{box["north"]}',
-        "bboxSR": "4326",
-        "imageSR": "4326",
-        "size": f"{IMAGE_SIZE},{IMAGE_SIZE}",
-        "format": "png32",
-        "transparent": "false",
-        "f": "image",
-    }
-    headers = {"User-Agent": "AgriTerrain-AI university land-cover prototype"}
     try:
-        with httpx.Client(timeout=45, follow_redirects=True, headers=headers) as client:
-            response = client.get(WORLD_IMAGERY_EXPORT, params=parameters)
-            response.raise_for_status()
+        return fetch_esri_world_imagery(box, IMAGE_SIZE)
     except httpx.HTTPError as error:
         raise HTTPException(
             status_code=502,
             detail="The satellite imagery provider could not supply this selection.",
         ) from error
-
-    if "image" not in response.headers.get("content-type", "").lower():
-        raise HTTPException(status_code=502, detail="The imagery provider returned no usable image.")
-    try:
-        return Image.open(io.BytesIO(response.content)).convert("RGB")
     except Exception as error:
-        raise HTTPException(status_code=502, detail="The imagery response was not a valid RGB image.") from error
+        raise HTTPException(
+            status_code=502,
+            detail="The satellite imagery provider returned no usable image.",
+        ) from error
 
 
 def polygon_pixel_mask(
@@ -459,6 +449,107 @@ def polygon_pixel_mask(
     mask_image = Image.new("L", (width, height), 0)
     ImageDraw.Draw(mask_image).polygon(pixels, fill=255)
     return np.asarray(mask_image) > 0
+
+
+def regions_pixel_mask(
+    regions: list[dict[str, Any]],
+    box: dict[str, float],
+    size: tuple[int, int],
+) -> np.ndarray:
+    """Rasterize accepted vector regions for consistent coverage and overlay."""
+
+    width, height = size
+    longitude_span = box["east"] - box["west"]
+    latitude_span = box["north"] - box["south"]
+    mask_image = Image.new("L", size, 0)
+    draw = ImageDraw.Draw(mask_image)
+    for region in regions:
+        coordinates = region.get("coordinates") or []
+        if len(coordinates) < 3:
+            continue
+        pixels = [
+            (
+                round((float(longitude) - box["west"]) / longitude_span * (width - 1)),
+                round((box["north"] - float(latitude)) / latitude_span * (height - 1)),
+            )
+            for latitude, longitude in coordinates
+        ]
+        draw.polygon(pixels, fill=255)
+    return np.asarray(mask_image) > 0
+
+
+def merge_field_boundaries(
+    dav2_fields: list[dict[str, Any]],
+    visible_fields: list[dict[str, Any]],
+    box: dict[str, float],
+    size: tuple[int, int],
+    max_features: int,
+) -> list[dict[str, Any]]:
+    """Combine strong DAv2 instances with edge-derived agricultural parcels."""
+
+    visible_entries = [
+        (region, regions_pixel_mask([region], box, size))
+        for region in visible_fields
+    ]
+    dav2_entries = [
+        (region, regions_pixel_mask([region], box, size))
+        for region in dav2_fields
+    ]
+    accepted: list[tuple[dict[str, Any], np.ndarray]] = []
+
+    # High-confidence DAv2 instances can stand alone. Lower-confidence DAv2
+    # shapes are proposals only; the visible-boundary stage must confirm and
+    # split them before they can be displayed.
+    for region, mask in dav2_entries:
+        pixel_count = int(np.count_nonzero(mask))
+        if pixel_count == 0:
+            continue
+        if float(region.get("confidence", 0.0)) >= 60.0:
+            accepted.append((region, mask))
+
+    for region, mask in visible_entries:
+        pixel_count = int(np.count_nonzero(mask))
+        if pixel_count == 0:
+            continue
+        proposal_agreement = False
+        for _, dav2_mask in dav2_entries:
+            dav2_pixel_count = int(np.count_nonzero(dav2_mask))
+            if dav2_pixel_count == 0:
+                continue
+            intersection = int(np.count_nonzero(mask & dav2_mask))
+            visible_containment = intersection / max(pixel_count, 1)
+            proposal_coverage = intersection / max(dav2_pixel_count, 1)
+            if visible_containment >= 0.35 and proposal_coverage >= 0.08:
+                proposal_agreement = True
+                break
+        if not proposal_agreement:
+            continue
+        duplicate = False
+        for _, accepted_mask in accepted:
+            intersection = int(np.count_nonzero(mask & accepted_mask))
+            if intersection == 0:
+                continue
+            containment = intersection / max(
+                min(pixel_count, int(np.count_nonzero(accepted_mask))),
+                1,
+            )
+            if containment >= 0.55:
+                duplicate = True
+                break
+        if not duplicate:
+            accepted.append((region, mask))
+
+    accepted.sort(
+        key=lambda item: (
+            float(item[0].get("confidence", 0.0)),
+            float(item[0].get("area_m2", 0.0)),
+        ),
+        reverse=True,
+    )
+    result = []
+    for index, (region, _) in enumerate(accepted[:max_features], start=1):
+        result.append({**region, "id": f"field-{index}"})
+    return result
 
 
 def _normalise_model_output(output: np.ndarray) -> np.ndarray:
@@ -555,6 +646,106 @@ def clean_binary_mask(binary_mask: np.ndarray, settings: dict[str, Any]) -> np.n
     return cleaned > 0
 
 
+def refine_water_mask(
+    image: Image.Image,
+    probabilities: np.ndarray,
+    selected_mask: np.ndarray,
+    building_mask: np.ndarray,
+    minimum_probability: float,
+    sentinel_prior: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Fuse high-resolution model evidence with optional free Sentinel-2 NDWI."""
+
+    water_probability = probabilities[:, :, CLASS_IDS["water"]]
+    tree_probability = probabilities[:, :, CLASS_IDS["tree"]]
+    crop_probability = probabilities[:, :, CLASS_IDS["crop"]]
+    building_probability = probabilities[:, :, CLASS_IDS["building"]]
+
+    smooth_water = cv2.GaussianBlur(water_probability, (0, 0), sigmaX=2.0)
+    rgb = np.asarray(image.resize(selected_mask.shape[::-1])).astype(np.uint8)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    local_mean = cv2.blur(gray, (9, 9))
+    local_square_mean = cv2.blur(gray * gray, (9, 9))
+    local_standard_deviation = np.sqrt(
+        np.maximum(local_square_mean - local_mean * local_mean, 0.0)
+    )
+
+    strong_seed = (
+        (water_probability >= minimum_probability)
+        & (water_probability >= tree_probability)
+        & (water_probability >= crop_probability)
+        & (water_probability >= building_probability)
+    )
+    relaxed_model = smooth_water >= 0.34
+    dark_smooth_surface = (gray <= 150.0) & (local_standard_deviation <= 26.0)
+
+    if sentinel_prior is None:
+        sentinel_probability = np.zeros_like(water_probability, dtype=np.float32)
+        sentinel_support = np.zeros_like(selected_mask, dtype=bool)
+    else:
+        sentinel_probability = np.clip(sentinel_prior, 0.0, 1.0).astype(np.float32)
+        sentinel_support = sentinel_probability >= 0.58
+
+    non_water_conflict = (
+        (building_probability > water_probability + 0.05)
+        | ((tree_probability >= 0.62) & (tree_probability > water_probability + 0.08))
+        | ((crop_probability >= 0.65) & (crop_probability > water_probability + 0.12))
+        | building_mask
+    )
+    candidate = (
+        strong_seed
+        | relaxed_model
+        | (sentinel_support & dark_smooth_surface & (water_probability >= 0.12))
+    )
+    candidate &= selected_mask & ~non_water_conflict
+    candidate = cv2.morphologyEx(
+        candidate.astype(np.uint8),
+        cv2.MORPH_CLOSE,
+        np.ones((7, 7), dtype=np.uint8),
+    ).astype(bool)
+    candidate &= selected_mask & ~building_mask
+
+    accepted = np.zeros_like(selected_mask, dtype=bool)
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        candidate.astype(np.uint8),
+        connectivity=8,
+    )
+    rejected_components = 0
+    for label in range(1, component_count):
+        component = labels == label
+        pixel_count = int(stats[label, cv2.CC_STAT_AREA])
+        if pixel_count < 12:
+            rejected_components += 1
+            continue
+
+        seed_pixels = int(np.count_nonzero(strong_seed & component))
+        model_mean = float(water_probability[component].mean())
+        sentinel_mean = float(sentinel_probability[component].mean())
+        tree_ratio = float(
+            np.count_nonzero(
+                component & (tree_probability > water_probability + 0.08)
+            )
+            / pixel_count
+        )
+        has_model_support = seed_pixels >= 8 and model_mean >= 0.48
+        has_joint_support = sentinel_mean >= 0.60 and model_mean >= 0.25
+        if tree_ratio > 0.35 or not (has_model_support or has_joint_support):
+            rejected_components += 1
+            continue
+        accepted[component] = True
+
+    combined_confidence = np.maximum(
+        water_probability,
+        sentinel_probability * 0.82,
+    )
+    diagnostics = {
+        "components_considered": max(component_count - 1, 0),
+        "components_rejected": rejected_components,
+        "sentinel_used": sentinel_prior is not None,
+    }
+    return accepted & selected_mask, combined_confidence, diagnostics
+
+
 def pixel_to_coordinate(
     x: float,
     y: float,
@@ -574,6 +765,7 @@ def extract_regions(
     box: dict[str, float],
     metres_per_pixel_x: float,
     metres_per_pixel_y: float,
+    minimum_mean_confidence: float | None = None,
 ) -> list[dict[str, Any]]:
     settings = CLASS_SETTINGS[class_key]
     cleaned = clean_binary_mask(binary_mask, settings)
@@ -608,7 +800,12 @@ def extract_regions(
             if np.any(region_pixels)
             else 0.0
         )
-        if confidence < REGION_MEAN_CONFIDENCE_FLOORS[class_key]:
+        required_confidence = (
+            REGION_MEAN_CONFIDENCE_FLOORS[class_key]
+            if minimum_mean_confidence is None
+            else float(minimum_mean_confidence)
+        )
+        if confidence < required_confidence:
             continue
 
         coordinates = [
@@ -745,16 +942,89 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     except Exception as error:
         print(f"Microsoft building lookup failed: {error}")
 
+    building_exclusion_mask = (
+        regions_pixel_mask(detections["building"], box, selected_mask.shape[::-1])
+        & selected_mask
+    )
+    building_exclusion_mask = cv2.dilate(
+        building_exclusion_mask.astype(np.uint8),
+        np.ones((3, 3), dtype=np.uint8),
+        iterations=1,
+    ).astype(bool) & selected_mask
+    sentinel_water_prior: np.ndarray | None = None
+    sentinel_water_metadata: dict[str, Any] = {}
+    water_detection_status = "openearthmap-only"
+    water_detection_detail = ""
     try:
-        ftw_fields = get_field_boundaries(
+        sentinel_water_prior, sentinel_water_metadata = get_sentinel_water_prior(
+            box,
+            selected_mask.shape[::-1],
+        )
+        water_detection_status = "complete"
+    except Exception as error:
+        water_detection_detail = str(error)
+        print(f"Sentinel-2 water confirmation unavailable: {error}")
+
+    refined_water_mask, water_confidence, water_diagnostics = refine_water_mask(
+        image=image,
+        probabilities=probabilities,
+        selected_mask=selected_mask,
+        building_mask=building_exclusion_mask,
+        minimum_probability=class_thresholds["water"],
+        sentinel_prior=sentinel_water_prior,
+    )
+    class_masks["water"] = refined_water_mask
+    detections["water"] = extract_regions(
+        "water",
+        refined_water_mask,
+        water_confidence,
+        box,
+        metres_per_pixel_x,
+        metres_per_pixel_y,
+        minimum_mean_confidence=0.55,
+    )
+
+    # OpenEarthMap agriculture is a semantic mask, not an individual-parcel
+    # detector. Never display its merged contours as a field-boundary fallback.
+    detections["crop"] = []
+    crop_detection_status = "complete"
+    crop_detection_detail = ""
+    visible_fields = get_visible_field_boundaries(
+        box,
+        image=image,
+        probabilities=probabilities,
+        selected_mask=selected_mask,
+        excluded_mask=refined_water_mask | building_exclusion_mask,
+        minimum_area_m2=120.0,
+        max_features=MAX_FEATURES_PER_CLASS,
+    )
+    dav2_fields: list[dict[str, Any]] = []
+    try:
+        dav2_fields = get_field_boundaries(
             boundary,
             box,
+            image=image,
+            probabilities=probabilities,
+            selected_mask=selected_mask,
+            excluded_mask=refined_water_mask | building_exclusion_mask,
             max_features=MAX_FEATURES_PER_CLASS,
         )
-        if ftw_fields:
-            detections["crop"] = ftw_fields
     except Exception as error:
-        print(f"FTW field detection failed: {error}")
+        crop_detection_status = "visible-boundary-only"
+        crop_detection_detail = str(error)
+        print(f"DelineateAnythingV2 field detection failed: {error}")
+    field_boundaries = merge_field_boundaries(
+        dav2_fields,
+        visible_fields,
+        box,
+        selected_mask.shape[::-1],
+        MAX_FEATURES_PER_CLASS,
+    )
+    detections["crop"] = field_boundaries
+    class_masks["crop"] = (
+        regions_pixel_mask(field_boundaries, box, selected_mask.shape[::-1])
+        & selected_mask
+    )
 
     selected_pixels = max(int(np.count_nonzero(selected_mask)), 1)
     coverage = {
@@ -786,6 +1056,19 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         "coverage": coverage,
         "detections": detections,
         "overlay_image": make_overlay(class_masks, selected_mask),
+        "crop_detection": {
+            "status": crop_detection_status,
+            "model": "DelineateAnythingV2 + OpenEarthMap visible boundaries",
+            "detail": crop_detection_detail,
+            "fallback_used": False,
+        },
+        "water_detection": {
+            "status": water_detection_status,
+            "model": "OpenEarthMap + Sentinel-2 NDWI",
+            "detail": water_detection_detail,
+            "sentinel": sentinel_water_metadata,
+            **water_diagnostics,
+        },
         "imagery": {
             "provider": "Esri World Imagery",
             "type": "High-resolution RGB mosaic",
@@ -795,22 +1078,29 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
             **image_quality,
         },
         "model": {
-            "name": "OpenEarthMap U-Net EfficientNet-B4",
-            "checkpoint": "Cross-validation fold 1",
-            "input": "512 × 512 RGB",
+            "name": "OpenEarthMap + DAv2 visible-field fusion + Sentinel-2 NDWI",
+            "checkpoint": "OpenEarthMap fold 1 + cached DAv2 weights",
+            "input": "512 × 512 Esri RGB",
             "test_time_augmentation": request.quality == "accurate",
             "source": "https://github.com/sebastianbahr/OpenEarthMap",
             "benchmark": MODEL_BENCHMARK,
         },
         "warning": (
-            "These are AI-assisted semantic regions, not survey or cadastral boundaries. "
-            "Buildings that touch may merge, and neighbouring crop parcels can appear as one region. "
+            "These are AI-assisted field instances and semantic regions, not survey or cadastral boundaries. "
+            "Some neighbouring crop parcels can still be missed or imperfectly separated. "
             "Water and building outputs use stricter precision filters, but false positives can still occur. "
             "Validate important decisions with local observations and Bangladesh-labelled data."
+            + (
+                " Individual crop-field detection was unavailable for this request; "
+                "no semantic crop fallback or fabricated polygon was shown."
+                if crop_detection_status != "complete"
+                else ""
+            )
         ),
         "attribution": (
             "Imagery displayed and analysed from Esri World Imagery. "
-            "Land-cover model trained on the OpenEarthMap benchmark."
+            "Land-cover model trained on the OpenEarthMap benchmark. "
+            "Water confirmation uses free Sentinel-2 L2A imagery when available."
         ),
     }
 
