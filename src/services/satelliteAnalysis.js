@@ -154,22 +154,60 @@ export async function prepareMlModel() {
   return response.json()
 }
 
-function normaliseRegions(regions) {
-  if (!Array.isArray(regions)) return []
-  return regions
-    .filter(
-      (region) =>
-        Array.isArray(region.coordinates) && region.coordinates.length >= 3,
-    )
-    .map((region, index) => ({
-      id: region.id || `region-${index + 1}`,
-      coordinates: region.coordinates.map(([latitude, longitude]) => [
+function isCoordinatePair(value) {
+  if (!Array.isArray(value) || value.length < 2) return false
+
+  const latitude = Number(value[0])
+  const longitude = Number(value[1])
+
+  return Number.isFinite(latitude) && Number.isFinite(longitude)
+}
+
+function normaliseCoordinateStructure(coordinates) {
+  if (!Array.isArray(coordinates) || coordinates.length === 0) return null
+
+  // Normal polygon ring:
+  // [[lat, lng], [lat, lng], ...]
+  if (isCoordinatePair(coordinates[0])) {
+    const ring = coordinates
+      .filter(isCoordinatePair)
+      .map(([latitude, longitude]) => [
         Number(latitude),
         Number(longitude),
-      ]),
-      areaM2: Number(region.area_m2 || 0),
-      confidence: Number(region.confidence || 0),
-    }))
+      ])
+
+    return ring.length >= 3 ? ring : null
+  }
+
+  // Polygon with holes:
+  // [
+  //   [[lat, lng], ...],  // outer ring
+  //   [[lat, lng], ...],  // pond/building hole
+  // ]
+  const rings = coordinates
+    .map((ring) => normaliseCoordinateStructure(ring))
+    .filter(Boolean)
+
+  return rings.length > 0 ? rings : null
+}
+
+function normaliseRegions(regions) {
+  if (!Array.isArray(regions)) return []
+
+  return regions
+    .map((region, index) => {
+      const coordinates = normaliseCoordinateStructure(region.coordinates)
+
+      if (!coordinates) return null
+
+      return {
+        id: region.id || `region-${index + 1}`,
+        coordinates,
+        areaM2: Number(region.area_m2 || 0),
+        confidence: Number(region.confidence || 0),
+      }
+    })
+    .filter(Boolean)
 }
 
 function normaliseAnalysis(result, boundary, location) {

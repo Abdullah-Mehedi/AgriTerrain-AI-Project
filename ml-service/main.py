@@ -456,27 +456,259 @@ def regions_pixel_mask(
     box: dict[str, float],
     size: tuple[int, int],
 ) -> np.ndarray:
-    """Rasterize accepted vector regions for consistent coverage and overlay."""
+    """Rasterize flat polygons or Leaflet-style polygons with holes."""
 
     width, height = size
     longitude_span = box["east"] - box["west"]
     latitude_span = box["north"] - box["south"]
+
     mask_image = Image.new("L", size, 0)
     draw = ImageDraw.Draw(mask_image)
+
+    def is_coordinate_pair(value: Any) -> bool:
+        return (
+            isinstance(value, (list, tuple))
+            and len(value) >= 2
+            and isinstance(value[0], (int, float))
+            and isinstance(value[1], (int, float))
+        )
+
+    def ring_to_pixels(ring: list[Any]) -> list[tuple[int, int]]:
+        pixels: list[tuple[int, int]] = []
+
+        for point in ring:
+            if not is_coordinate_pair(point):
+                continue
+
+            latitude = float(point[0])
+            longitude = float(point[1])
+
+            pixels.append(
+                (
+                    round(
+                        (longitude - box["west"])
+                        / longitude_span
+                        * (width - 1)
+                    ),
+                    round(
+                        (box["north"] - latitude)
+                        / latitude_span
+                        * (height - 1)
+                    ),
+                )
+            )
+
+        return pixels
+
     for region in regions:
         coordinates = region.get("coordinates") or []
-        if len(coordinates) < 3:
+
+        if not coordinates:
             continue
-        pixels = [
-            (
-                round((float(longitude) - box["west"]) / longitude_span * (width - 1)),
-                round((box["north"] - float(latitude)) / latitude_span * (height - 1)),
-            )
-            for latitude, longitude in coordinates
-        ]
-        draw.polygon(pixels, fill=255)
+
+        # Old format:
+        # [[lat, lon], [lat, lon], ...]
+        if is_coordinate_pair(coordinates[0]):
+            rings = [coordinates]
+
+        # Hole-aware format:
+        # [
+        #   [[lat, lon], ...],   # outer
+        #   [[lat, lon], ...],   # hole
+        # ]
+        else:
+            rings = coordinates
+
+        if not rings:
+            continue
+
+        outer_pixels = ring_to_pixels(rings[0])
+
+        if len(outer_pixels) < 3:
+            continue
+
+        draw.polygon(outer_pixels, fill=255)
+
+        # Internal rings are holes.
+        for hole_ring in rings[1:]:
+            hole_pixels = ring_to_pixels(hole_ring)
+
+            if len(hole_pixels) >= 3:
+                draw.polygon(hole_pixels, fill=0)
+
     return np.asarray(mask_image) > 0
 
+
+
+def merge_building_detections(
+    microsoft_buildings: list[dict[str, Any]],
+    semantic_buildings: list[dict[str, Any]],
+    refined_water_mask: np.ndarray,
+    box: dict[str, float],
+    size: tuple[int, int],
+    max_features: int,
+) -> list[dict[str, Any]]:
+    """Fuse Microsoft footprints with high-confidence OpenEarthMap backups.
+
+    Microsoft remains the preferred geometry. OpenEarthMap contributes only
+    buildings Microsoft missed. Strong overlap with confirmed Water V2 removes
+    a building candidate from the visible orange result.
+    """
+
+    accepted: list[tuple[dict[str, Any], np.ndarray, str]] = []
+
+    rejected_water_microsoft = 0
+    rejected_water_semantic = 0
+    rejected_semantic_confidence = 0
+    rejected_semantic_duplicate = 0
+
+    def region_mask(region: dict[str, Any]) -> np.ndarray:
+        return regions_pixel_mask([region], box, size)
+
+    def water_overlap(mask: np.ndarray) -> float:
+        pixels = int(np.count_nonzero(mask))
+        if pixels <= 0:
+            return 1.0
+        return float(
+            np.count_nonzero(mask & refined_water_mask)
+            / pixels
+        )
+
+    # --------------------------------------------------------
+    # Microsoft first: preferred footprint geometry.
+    # --------------------------------------------------------
+    for region in microsoft_buildings:
+        mask = region_mask(region)
+        pixels = int(np.count_nonzero(mask))
+
+        if pixels <= 0:
+            continue
+
+        overlap = water_overlap(mask)
+
+        # A building almost entirely inside confirmed water is considered
+        # a false/stale footprint. Small shoreline overlap remains allowed.
+        if overlap >= 0.55:
+            rejected_water_microsoft += 1
+            continue
+
+        accepted.append((dict(region), mask, "microsoft"))
+
+    microsoft_masks = [
+        mask
+        for _, mask, source in accepted
+        if source == "microsoft"
+    ]
+
+    # --------------------------------------------------------
+    # OpenEarthMap backup: stricter than the crop-exclusion mask.
+    # --------------------------------------------------------
+    for region in semantic_buildings:
+        confidence = float(region.get("confidence", 0.0))
+
+        if confidence < 70.0:
+            rejected_semantic_confidence += 1
+            continue
+
+        mask = region_mask(region)
+        pixels = int(np.count_nonzero(mask))
+
+        if pixels <= 0:
+            continue
+
+        overlap = water_overlap(mask)
+
+        if overlap >= 0.45:
+            rejected_water_semantic += 1
+            continue
+
+        duplicate = False
+
+        for microsoft_mask in microsoft_masks:
+            intersection = int(
+                np.count_nonzero(mask & microsoft_mask)
+            )
+
+            if intersection <= 0:
+                continue
+
+            microsoft_pixels = int(
+                np.count_nonzero(microsoft_mask)
+            )
+
+            union = (
+                pixels
+                + microsoft_pixels
+                - intersection
+            )
+
+            iou = intersection / max(union, 1)
+            semantic_containment = intersection / max(pixels, 1)
+
+            # Microsoft geometry wins whenever the semantic region clearly
+            # represents the same roof.
+            if iou >= 0.20 or semantic_containment >= 0.35:
+                duplicate = True
+                break
+
+        if duplicate:
+            rejected_semantic_duplicate += 1
+            continue
+
+        backup_region = {
+            **region,
+            "source": "openearthmap-backup",
+        }
+
+        accepted.append(
+            (backup_region, mask, "openearthmap")
+        )
+
+    # Microsoft results first, then confidence/area.
+    accepted.sort(
+        key=lambda item: (
+            1 if item[2] == "microsoft" else 0,
+            float(item[0].get("confidence", 0.0)),
+            float(item[0].get("area_m2", 0.0)),
+        ),
+        reverse=True,
+    )
+
+    results: list[dict[str, Any]] = []
+
+    microsoft_kept = 0
+    semantic_kept = 0
+
+    for index, (region, _, source) in enumerate(
+        accepted[:max_features],
+        start=1,
+    ):
+        if source == "microsoft":
+            microsoft_kept += 1
+        else:
+            semantic_kept += 1
+
+        results.append(
+            {
+                **region,
+                "id": f"building-{index}",
+            }
+        )
+
+    print(
+        "BUILDING V2-A DIAGNOSTICS: "
+        f"microsoft_input={len(microsoft_buildings)}, "
+        f"semantic_input={len(semantic_buildings)}, "
+        f"microsoft_kept={microsoft_kept}, "
+        f"semantic_kept={semantic_kept}, "
+        f"water_reject_ms={rejected_water_microsoft}, "
+        f"water_reject_semantic={rejected_water_semantic}, "
+        f"semantic_low_conf={rejected_semantic_confidence}, "
+        f"semantic_duplicates={rejected_semantic_duplicate}, "
+        f"final={len(results)}"
+    )
+
+    return results
 
 def merge_field_boundaries(
     dav2_fields: list[dict[str, Any]],
@@ -485,7 +717,13 @@ def merge_field_boundaries(
     size: tuple[int, int],
     max_features: int,
 ) -> list[dict[str, Any]]:
-    """Combine strong DAv2 instances with edge-derived agricultural parcels."""
+    """Return precision-filtered visible parcels as the final field geometry.
+
+    The visible-field stage has already removed water/buildings and rejected
+    light non-crop surfaces, tree-like dark rough vegetation and strongly
+    irregular blobs. DAv2 is therefore supporting evidence only: agreement can
+    raise confidence, but disagreement never deletes an otherwise valid field.
+    """
 
     visible_entries = [
         (region, regions_pixel_mask([region], box, size))
@@ -495,62 +733,142 @@ def merge_field_boundaries(
         (region, regions_pixel_mask([region], box, size))
         for region in dav2_fields
     ]
+
     accepted: list[tuple[dict[str, Any], np.ndarray]] = []
 
-    # High-confidence DAv2 instances can stand alone. Lower-confidence DAv2
-    # shapes are proposals only; the visible-boundary stage must confirm and
-    # split them before they can be displayed.
-    for region, mask in dav2_entries:
-        pixel_count = int(np.count_nonzero(mask))
-        if pixel_count == 0:
-            continue
-        if float(region.get("confidence", 0.0)) >= 60.0:
-            accepted.append((region, mask))
+    dav2_confirmed_count = 0
+    independent_count = 0
+    duplicate_rejections = 0
 
     for region, mask in visible_entries:
         pixel_count = int(np.count_nonzero(mask))
+
         if pixel_count == 0:
             continue
-        proposal_agreement = False
+
+        dav2_confirmed = False
+        best_visible_containment = 0.0
+        best_proposal_coverage = 0.0
+
         for _, dav2_mask in dav2_entries:
             dav2_pixel_count = int(np.count_nonzero(dav2_mask))
+
             if dav2_pixel_count == 0:
                 continue
+
             intersection = int(np.count_nonzero(mask & dav2_mask))
+
+            if intersection < 8:
+                continue
+
             visible_containment = intersection / max(pixel_count, 1)
             proposal_coverage = intersection / max(dav2_pixel_count, 1)
-            if visible_containment >= 0.35 and proposal_coverage >= 0.08:
-                proposal_agreement = True
+
+            best_visible_containment = max(
+                best_visible_containment,
+                visible_containment,
+            )
+            best_proposal_coverage = max(
+                best_proposal_coverage,
+                proposal_coverage,
+            )
+
+            if (
+                visible_containment >= 0.20
+                and proposal_coverage >= 0.04
+            ):
+                dav2_confirmed = True
                 break
-        if not proposal_agreement:
-            continue
+
+        # DAv2 does not control acceptance anymore. It gives a small certainty
+        # bonus when its proposal agrees with the precision-filtered parcel.
+        original_confidence = float(region.get("confidence", 0.0))
+
+        if dav2_confirmed:
+            dav2_confirmed_count += 1
+            adjusted_confidence = min(99.0, original_confidence + 5.0)
+        else:
+            independent_count += 1
+            adjusted_confidence = original_confidence
+
+        adjusted_region = {
+            **region,
+            "confidence": round(adjusted_confidence, 1),
+            "dav2_confirmed": dav2_confirmed,
+        }
+
+        # Remove duplicate visible parcels only. A DAv2 proposal can never
+        # replace or reshape the final visible-field geometry.
         duplicate = False
+
         for _, accepted_mask in accepted:
+            accepted_pixel_count = int(np.count_nonzero(accepted_mask))
+
             intersection = int(np.count_nonzero(mask & accepted_mask))
+
             if intersection == 0:
                 continue
-            containment = intersection / max(
-                min(pixel_count, int(np.count_nonzero(accepted_mask))),
+
+            union = (
+                pixel_count
+                + accepted_pixel_count
+                - intersection
+            )
+
+            iou = intersection / max(union, 1)
+
+            smaller_containment = intersection / max(
+                min(pixel_count, accepted_pixel_count),
                 1,
             )
-            if containment >= 0.55:
+
+            if iou >= 0.45 or smaller_containment >= 0.72:
                 duplicate = True
                 break
-        if not duplicate:
-            accepted.append((region, mask))
+
+        if duplicate:
+            duplicate_rejections += 1
+            continue
+
+        accepted.append((adjusted_region, mask))
 
     accepted.sort(
         key=lambda item: (
             float(item[0].get("confidence", 0.0)),
+            float(item[0].get("field_shape_score", 0.0)),
             float(item[0].get("area_m2", 0.0)),
         ),
         reverse=True,
     )
-    result = []
-    for index, (region, _) in enumerate(accepted[:max_features], start=1):
-        result.append({**region, "id": f"field-{index}"})
-    return result
 
+    result: list[dict[str, Any]] = []
+
+    for index, (region, _) in enumerate(
+        accepted[:max_features],
+        start=1,
+    ):
+        result.append(
+            {
+                **region,
+                "id": f"field-{index}",
+            }
+        )
+
+    print(
+        "DAV2 CONFIRMATION BOOST: "
+        f"confirmed={dav2_confirmed_count}, "
+        f"independent={independent_count}"
+    )
+
+    print(
+        "FIELD FUSION DIAGNOSTICS: "
+        f"visible={len(visible_entries)}, "
+        f"dav2={len(dav2_entries)}, "
+        f"duplicates={duplicate_rejections}, "
+        f"accepted={len(result)}"
+    )
+
+    return result
 
 def _normalise_model_output(output: np.ndarray) -> np.ndarray:
     prediction = np.asarray(output)
@@ -686,64 +1004,191 @@ def refine_water_mask(
         sentinel_probability = np.clip(sentinel_prior, 0.0, 1.0).astype(np.float32)
         sentinel_support = sentinel_probability >= 0.58
 
-    non_water_conflict = (
-        (building_probability > water_probability + 0.05)
-        | ((tree_probability >= 0.62) & (tree_probability > water_probability + 0.08))
-        | ((crop_probability >= 0.65) & (crop_probability > water_probability + 0.12))
-        | building_mask
+    # A Microsoft/semantic building prediction should normally block water,
+    # but a false building footprint must not erase a strongly supported pond.
+    #
+    # Water is allowed to override building evidence only when the Esri
+    # surface is dark/smooth and either the high-resolution model or
+    # Sentinel-2 provides strong supporting evidence.
+    model_water_override = (
+        (water_probability >= max(float(minimum_probability), 0.60))
+        & dark_smooth_surface
     )
+
+    sentinel_water_override = (
+        (sentinel_probability >= 0.72)
+        & dark_smooth_surface
+        & (water_probability >= 0.20)
+    )
+
+    strong_water_override = (
+        model_water_override
+        | sentinel_water_override
+    )
+
+    building_conflict = (
+        (
+            (building_probability > water_probability + 0.05)
+            | building_mask
+        )
+        & ~strong_water_override
+    )
+
+    non_water_conflict = (
+        building_conflict
+        | (
+            (tree_probability >= 0.62)
+            & (tree_probability > water_probability + 0.08)
+        )
+        | (
+            (crop_probability >= 0.65)
+            & (crop_probability > water_probability + 0.12)
+        )
+    )
+
     candidate = (
         strong_seed
         | relaxed_model
-        | (sentinel_support & dark_smooth_surface & (water_probability >= 0.12))
+        | (
+            sentinel_support
+            & dark_smooth_surface
+            & (water_probability >= 0.12)
+        )
     )
+
     candidate &= selected_mask & ~non_water_conflict
+
     candidate = cv2.morphologyEx(
         candidate.astype(np.uint8),
         cv2.MORPH_CLOSE,
         np.ones((7, 7), dtype=np.uint8),
     ).astype(bool)
-    candidate &= selected_mask & ~building_mask
+
+    # Closing can bridge tiny gaps. Re-apply all conflicts afterwards so
+    # morphology cannot accidentally grow water through trees, crops or
+    # genuine buildings.
+    candidate &= selected_mask & ~non_water_conflict
 
     accepted = np.zeros_like(selected_mask, dtype=bool)
+
     component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
         candidate.astype(np.uint8),
         connectivity=8,
     )
-    rejected_components = 0
+
+    rejected_small = 0
+    rejected_tree = 0
+    rejected_support = 0
+    accepted_model = 0
+    accepted_joint = 0
+
     for label in range(1, component_count):
         component = labels == label
         pixel_count = int(stats[label, cv2.CC_STAT_AREA])
+
         if pixel_count < 12:
-            rejected_components += 1
+            rejected_small += 1
             continue
 
-        seed_pixels = int(np.count_nonzero(strong_seed & component))
-        model_mean = float(water_probability[component].mean())
-        sentinel_mean = float(sentinel_probability[component].mean())
+        seed_pixels = int(
+            np.count_nonzero(strong_seed & component)
+        )
+
+        model_mean = float(
+            water_probability[component].mean()
+        )
+
+        sentinel_mean = float(
+            sentinel_probability[component].mean()
+        )
+
         tree_ratio = float(
             np.count_nonzero(
-                component & (tree_probability > water_probability + 0.08)
+                component
+                & (
+                    tree_probability
+                    > water_probability + 0.08
+                )
             )
             / pixel_count
         )
-        has_model_support = seed_pixels >= 8 and model_mean >= 0.48
-        has_joint_support = sentinel_mean >= 0.60 and model_mean >= 0.25
-        if tree_ratio > 0.35 or not (has_model_support or has_joint_support):
-            rejected_components += 1
+
+        has_model_support = (
+            seed_pixels >= 8
+            and model_mean >= 0.48
+        )
+
+        has_joint_support = (
+            sentinel_mean >= 0.60
+            and model_mean >= 0.25
+        )
+
+        if tree_ratio > 0.35:
+            rejected_tree += 1
             continue
+
+        if not (
+            has_model_support
+            or has_joint_support
+        ):
+            rejected_support += 1
+            continue
+
         accepted[component] = True
+
+        if has_model_support:
+            accepted_model += 1
+        else:
+            accepted_joint += 1
 
     combined_confidence = np.maximum(
         water_probability,
         sentinel_probability * 0.82,
     )
+
+    building_override_pixels = int(
+        np.count_nonzero(
+            building_mask
+            & strong_water_override
+            & selected_mask
+        )
+    )
+
+    accepted_pixels = int(
+        np.count_nonzero(accepted)
+    )
+
+    print(
+        "WATER V2 DIAGNOSTICS: "
+        f"candidate_pixels={int(np.count_nonzero(candidate))}, "
+        f"accepted_pixels={accepted_pixels}, "
+        f"building_override_pixels={building_override_pixels}, "
+        f"components={max(component_count - 1, 0)}, "
+        f"accepted_model={accepted_model}, "
+        f"accepted_joint={accepted_joint}, "
+        f"rejected_small={rejected_small}, "
+        f"rejected_tree={rejected_tree}, "
+        f"rejected_support={rejected_support}"
+    )
+
     diagnostics = {
         "components_considered": max(component_count - 1, 0),
-        "components_rejected": rejected_components,
+        "components_rejected": (
+            rejected_small
+            + rejected_tree
+            + rejected_support
+        ),
+        "accepted_model": accepted_model,
+        "accepted_joint": accepted_joint,
+        "building_override_pixels": building_override_pixels,
         "sentinel_used": sentinel_prior is not None,
     }
-    return accepted & selected_mask, combined_confidence, diagnostics
+
+    return (
+        accepted & selected_mask,
+        combined_confidence,
+        diagnostics,
+    )
 
 
 def pixel_to_coordinate(
@@ -930,6 +1375,12 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         for class_key in ("crop", "water", "building")
     }
 
+    # Preserve the OpenEarthMap regions. They become high-confidence backup
+    # detections later instead of being discarded whenever Microsoft returns
+    # at least one footprint.
+    semantic_buildings = list(detections["building"])
+    microsoft_buildings: list[dict[str, Any]] = []
+
     try:
         microsoft_buildings = get_building_footprints(
             boundary,
@@ -937,13 +1388,16 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
             max_features=MAX_FEATURES_PER_CLASS,
             min_confidence=0.85,
         )
-        if microsoft_buildings:
-            detections["building"] = microsoft_buildings
     except Exception as error:
         print(f"Microsoft building lookup failed: {error}")
 
+    # Water V2 needs the Microsoft mask before final building fusion.
     building_exclusion_mask = (
-        regions_pixel_mask(detections["building"], box, selected_mask.shape[::-1])
+        regions_pixel_mask(
+            microsoft_buildings,
+            box,
+            selected_mask.shape[::-1],
+        )
         & selected_mask
     )
     building_exclusion_mask = cv2.dilate(
@@ -951,6 +1405,28 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         np.ones((3, 3), dtype=np.uint8),
         iterations=1,
     ).astype(bool) & selected_mask
+
+    # Microsoft footprints remain the primary building source. OpenEarthMap
+    # supplies a high-confidence backup exclusion so a building missed by
+    # Microsoft cannot be painted over as agricultural field.
+    semantic_building_probability = probabilities[:, :, CLASS_IDS["building"]]
+    semantic_building_exclusion_mask = (
+        (semantic_building_probability >= 0.50)
+        & selected_mask
+    )
+
+    semantic_building_exclusion_mask = cv2.morphologyEx(
+        semantic_building_exclusion_mask.astype(np.uint8),
+        cv2.MORPH_OPEN,
+        np.ones((3, 3), dtype=np.uint8),
+    ).astype(bool)
+
+    semantic_building_exclusion_mask = cv2.dilate(
+        semantic_building_exclusion_mask.astype(np.uint8),
+        np.ones((3, 3), dtype=np.uint8),
+        iterations=1,
+    ).astype(bool) & selected_mask
+
     sentinel_water_prior: np.ndarray | None = None
     sentinel_water_metadata: dict[str, Any] = {}
     water_detection_status = "openearthmap-only"
@@ -981,7 +1457,49 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         box,
         metres_per_pixel_x,
         metres_per_pixel_y,
-        minimum_mean_confidence=0.55,
+        # refine_water_mask already performs component-level model,
+        # Sentinel, tree and building checks. Do not reject an accepted pond
+        # a second time based on another mean-confidence threshold.
+        minimum_mean_confidence=None,
+    )
+
+    # Building V2-A: Microsoft geometry is primary, while high-confidence
+    # OpenEarthMap regions recover roofs Microsoft missed. Confirmed Water V2
+    # has priority over both sources.
+    detections["building"] = merge_building_detections(
+        microsoft_buildings,
+        semantic_buildings,
+        refined_water_mask,
+        box,
+        selected_mask.shape[::-1],
+        MAX_FEATURES_PER_CLASS,
+    )
+
+    class_masks["building"] = (
+        regions_pixel_mask(
+            detections["building"],
+            box,
+            selected_mask.shape[::-1],
+        )
+        & selected_mask
+        & ~refined_water_mask
+    )
+
+    # Fields are detected only after buildings and water. Microsoft building
+    # footprints are supplemented by OpenEarthMap building evidence for crop
+    # exclusion; water continues to use the existing refined water detector.
+    crop_exclusion_mask = (
+        refined_water_mask
+        | building_exclusion_mask
+        | semantic_building_exclusion_mask
+    ) & selected_mask
+
+    print(
+        "CROP HARD EXCLUSION: "
+        f"water_pixels={int(np.count_nonzero(refined_water_mask))}, "
+        f"microsoft_building_pixels={int(np.count_nonzero(building_exclusion_mask))}, "
+        f"semantic_building_pixels={int(np.count_nonzero(semantic_building_exclusion_mask))}, "
+        f"total_pixels={int(np.count_nonzero(crop_exclusion_mask))}"
     )
 
     # OpenEarthMap agriculture is a semantic mask, not an individual-parcel
@@ -994,7 +1512,7 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         image=image,
         probabilities=probabilities,
         selected_mask=selected_mask,
-        excluded_mask=refined_water_mask | building_exclusion_mask,
+        excluded_mask=crop_exclusion_mask,
         minimum_area_m2=120.0,
         max_features=MAX_FEATURES_PER_CLASS,
     )
@@ -1006,7 +1524,7 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
             image=image,
             probabilities=probabilities,
             selected_mask=selected_mask,
-            excluded_mask=refined_water_mask | building_exclusion_mask,
+            excluded_mask=crop_exclusion_mask,
             max_features=MAX_FEATURES_PER_CLASS,
         )
     except Exception as error:
@@ -1022,8 +1540,13 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     )
     detections["crop"] = field_boundaries
     class_masks["crop"] = (
-        regions_pixel_mask(field_boundaries, box, selected_mask.shape[::-1])
+        regions_pixel_mask(
+            field_boundaries,
+            box,
+            selected_mask.shape[::-1],
+        )
         & selected_mask
+        & ~crop_exclusion_mask
     )
 
     selected_pixels = max(int(np.count_nonzero(selected_mask)), 1)
