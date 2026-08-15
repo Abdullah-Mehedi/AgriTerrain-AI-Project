@@ -1360,9 +1360,347 @@ def merge_fast_water_rescue(
             f"solidity={solidity:.3f}"
         )
 
+    # --------------------------------------------------------
+    # POND COMPLETION V3
+    #
+    # The original V3 logic above rescues COMPLETELY MISSED ponds.
+    #
+    # This second, additive branch handles a different case:
+    # Water V2 has already accepted PART of a pond, while the
+    # fast water scout sees the same connected pond more completely.
+    #
+    # A component is NEVER completed merely because it is dark/green.
+    # It must overlap or directly touch an already accepted waterbody
+    # and still pass fast-water + surface + geometry/context checks.
+    # --------------------------------------------------------
+
+    completed = np.zeros_like(
+        selected_mask,
+        dtype=bool,
+    )
+
+    completion_confidence = np.zeros_like(
+        fast_water_probability,
+        dtype=np.float32,
+    )
+
+    completion_source = (
+        fast_water_mask
+        & selected_mask
+        & ~building_mask
+    )
+
+    (
+        completion_component_count,
+        completion_labels,
+        completion_stats,
+        _,
+    ) = cv2.connectedComponentsWithStats(
+        completion_source.astype(np.uint8),
+        connectivity=8,
+    )
+
+    # Small bridge around already accepted Water V2 geometry.
+    # This permits a directly adjacent missing portion of the SAME
+    # pond, but not a separate nearby pond/field.
+    existing_touch_zone = cv2.dilate(
+        existing_water_mask.astype(np.uint8),
+        np.ones((5, 5), dtype=np.uint8),
+        iterations=1,
+    ).astype(bool)
+
+    completion_evaluated = 0
+    completion_accepted = 0
+
+    completion_rejected_connection = 0
+    completion_rejected_small = 0
+    completion_rejected_surface = 0
+    completion_rejected_shape = 0
+    completion_rejected_support = 0
+    completion_rejected_context = 0
+    completion_rejected_expansion = 0
+
+    for label in range(1, completion_component_count):
+        full_component = completion_labels == label
+
+        full_pixels = int(
+            completion_stats[label, cv2.CC_STAT_AREA]
+        )
+
+        if full_pixels < 100:
+            completion_rejected_small += 1
+            continue
+
+        existing_overlap = int(
+            np.count_nonzero(
+                full_component
+                & existing_water_mask
+            )
+        )
+
+        touching_existing = int(
+            np.count_nonzero(
+                full_component
+                & existing_touch_zone
+            )
+        )
+
+        # This is the key safety rule:
+        # completion is ONLY for the same already-detected pond.
+        if (
+            existing_overlap < 15
+            and touching_existing < 25
+        ):
+            completion_rejected_connection += 1
+            continue
+
+        missing_component = (
+            full_component
+            & ~existing_water_mask
+        )
+
+        missing_pixels = int(
+            np.count_nonzero(missing_component)
+        )
+
+        if missing_pixels < 60:
+            completion_rejected_small += 1
+            continue
+
+        completion_evaluated += 1
+
+        fast_mean = float(
+            fast_water_probability[
+                missing_component
+            ].mean()
+        )
+
+        fast_peak = float(
+            fast_water_probability[
+                missing_component
+            ].max()
+        )
+
+        surface_ratio = float(
+            np.count_nonzero(
+                missing_component
+                & pond_surface
+            )
+            / missing_pixels
+        )
+
+        dark_ratio = float(
+            np.count_nonzero(
+                missing_component
+                & dark_surface
+            )
+            / missing_pixels
+        )
+
+        algae_ratio = float(
+            np.count_nonzero(
+                missing_component
+                & algae_green_surface
+            )
+            / missing_pixels
+        )
+
+        if surface_ratio < 0.40:
+            completion_rejected_surface += 1
+            continue
+
+        contours, _ = cv2.findContours(
+            full_component.astype(np.uint8),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        if not contours:
+            completion_rejected_shape += 1
+            continue
+
+        contour = max(
+            contours,
+            key=cv2.contourArea,
+        )
+
+        x, y, width, height = cv2.boundingRect(
+            contour
+        )
+
+        if width <= 0 or height <= 0:
+            completion_rejected_shape += 1
+            continue
+
+        aspect_ratio = max(
+            width / height,
+            height / width,
+        )
+
+        hull = cv2.convexHull(contour)
+
+        hull_area = float(
+            cv2.contourArea(hull)
+        )
+
+        contour_area = float(
+            cv2.contourArea(contour)
+        )
+
+        solidity = (
+            contour_area / hull_area
+            if hull_area > 0.0
+            else 0.0
+        )
+
+        if aspect_ratio > 7.0:
+            completion_rejected_shape += 1
+            continue
+
+        if solidity < 0.40:
+            completion_rejected_shape += 1
+            continue
+
+        # Fast-model water evidence is mandatory.
+        if not (
+            fast_mean >= 0.30
+            or fast_peak >= 0.55
+        ):
+            completion_rejected_support += 1
+            continue
+
+        # Prevent a tiny accepted water sliver from expanding into an
+        # arbitrarily huge fast component.
+        association_pixels = max(
+            existing_overlap,
+            touching_existing,
+            1,
+        )
+
+        expansion_ratio = (
+            missing_pixels / association_pixels
+        )
+
+        if expansion_ratio > 12.0:
+            completion_rejected_expansion += 1
+            continue
+
+        component_u8 = full_component.astype(
+            np.uint8
+        )
+
+        outer = cv2.dilate(
+            component_u8,
+            np.ones((17, 17), dtype=np.uint8),
+            iterations=1,
+        ).astype(bool)
+
+        inner = cv2.dilate(
+            component_u8,
+            np.ones((3, 3), dtype=np.uint8),
+            iterations=1,
+        ).astype(bool)
+
+        ring = (
+            outer
+            & ~inner
+            & selected_mask
+            & ~existing_water_mask
+        )
+
+        ring_pixels = int(
+            np.count_nonzero(ring)
+        )
+
+        if ring_pixels > 0:
+            tree_ring_ratio = float(
+                np.count_nonzero(
+                    ring
+                    & (tree_probability >= 0.30)
+                )
+                / ring_pixels
+            )
+        else:
+            tree_ring_ratio = 0.0
+
+        sentinel_mean = float(
+            sentinel_probability[
+                missing_component
+            ].mean()
+        )
+
+        # Existing accepted water is already strong evidence that this
+        # location is a pond, but one additional contextual signal is
+        # still required before we extend its geometry.
+        has_context = (
+            sentinel_mean >= 0.25
+            or tree_ring_ratio >= 0.08
+            or dark_ratio >= 0.55
+            or algae_ratio >= 0.25
+        )
+
+        if not has_context:
+            completion_rejected_context += 1
+            continue
+
+        completed |= missing_component
+
+        completion_confidence[
+            missing_component
+        ] = fast_water_confidence[
+            missing_component
+        ]
+
+        completion_accepted += 1
+
+        print(
+            "WATER COMPLETION V3 ACCEPTED: "
+            f"full_pixels={full_pixels}, "
+            f"missing_pixels={missing_pixels}, "
+            f"overlap={existing_overlap}, "
+            f"touch={touching_existing}, "
+            f"expansion={expansion_ratio:.2f}, "
+            f"fast_mean={fast_mean:.3f}, "
+            f"fast_peak={fast_peak:.3f}, "
+            f"surface={surface_ratio:.3f}, "
+            f"dark={dark_ratio:.3f}, "
+            f"algae={algae_ratio:.3f}, "
+            f"tree_ring={tree_ring_ratio:.3f}, "
+            f"sentinel={sentinel_mean:.3f}, "
+            f"solidity={solidity:.3f}"
+        )
+
+    rescue_confidence = np.maximum(
+        rescue_confidence,
+        completion_confidence,
+    )
+
+    print(
+        "WATER COMPLETION V3 DIAGNOSTICS: "
+        f"evaluated={completion_evaluated}, "
+        f"accepted={completion_accepted}, "
+        f"completed_pixels="
+        f"{int(np.count_nonzero(completed))}, "
+        f"rejected_connection="
+        f"{completion_rejected_connection}, "
+        f"rejected_small="
+        f"{completion_rejected_small}, "
+        f"rejected_surface="
+        f"{completion_rejected_surface}, "
+        f"rejected_shape="
+        f"{completion_rejected_shape}, "
+        f"rejected_support="
+        f"{completion_rejected_support}, "
+        f"rejected_context="
+        f"{completion_rejected_context}, "
+        f"rejected_expansion="
+        f"{completion_rejected_expansion}"
+    )
+
     combined_mask = (
         existing_water_mask
         | rescued
+        | completed
     )
 
     combined_confidence = np.maximum(
@@ -1381,6 +1719,32 @@ def merge_fast_water_rescue(
         "rejected_shape": rejected_shape,
         "rejected_context": rejected_context,
         "rejected_support": rejected_support,
+        "completion_evaluated": completion_evaluated,
+        "completion_accepted": completion_accepted,
+        "completion_pixels": int(
+            np.count_nonzero(completed)
+        ),
+        "completion_rejected_connection": (
+            completion_rejected_connection
+        ),
+        "completion_rejected_small": (
+            completion_rejected_small
+        ),
+        "completion_rejected_surface": (
+            completion_rejected_surface
+        ),
+        "completion_rejected_shape": (
+            completion_rejected_shape
+        ),
+        "completion_rejected_support": (
+            completion_rejected_support
+        ),
+        "completion_rejected_context": (
+            completion_rejected_context
+        ),
+        "completion_rejected_expansion": (
+            completion_rejected_expansion
+        ),
     }
 
     print(
@@ -1794,13 +2158,14 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
             selected_mask.shape[::-1],
         )
 
-    # Standard is intentionally locked to the existing accurate pipeline.
-    # Balanced also preserves accurate four-view OpenEarthMap inference.
-    # Faster uses the already-supported single-view inference path.
+    # Mode Remap V1:
+    # Standard = former Balanced accuracy pipeline.
+    # Balanced = former Faster pipeline.
+    # Faster = fast inference with additional scheduling optimization.
     effective_quality = (
-        "fast"
-        if request.analysis_mode == "faster"
-        else "accurate"
+        "accurate"
+        if request.analysis_mode == "standard"
+        else "fast"
     )
 
     print(
@@ -1809,11 +2174,17 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         f"openearthmap={effective_quality}"
     )
 
-    if request.analysis_mode == "balanced":
-        balanced_overlap_started = time.perf_counter()
+    if request.analysis_mode in ("standard", "faster"):
+        overlap_started = time.perf_counter()
+
+        overlap_label = (
+            "STANDARD ACCURATE OVERLAP"
+            if request.analysis_mode == "standard"
+            else "FASTER V2 OVERLAP"
+        )
 
         print(
-            "BALANCED V2 OVERLAP: "
+            f"{overlap_label}: "
             "OpenEarthMap + Microsoft + Sentinel"
         )
 
@@ -1836,7 +2207,7 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
                     detail=str(error),
                 ) from error
 
-            balanced_wait_started = time.perf_counter()
+            external_wait_started = time.perf_counter()
 
             try:
                 microsoft_buildings = microsoft_future.result()
@@ -1859,16 +2230,18 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
                 )
 
             print(
-                "PERF Balanced external wait after OEM: "
-                f"{time.perf_counter() - balanced_wait_started:.2f}s"
+                f"PERF {overlap_label} external wait after OEM: "
+                f"{time.perf_counter() - external_wait_started:.2f}s"
             )
 
         print(
-            "PERF Balanced overlapped span: "
-            f"{time.perf_counter() - balanced_overlap_started:.2f}s"
+            f"PERF {overlap_label} span: "
+            f"{time.perf_counter() - overlap_started:.2f}s"
         )
 
     else:
+        # New Balanced = former Faster.
+        # Preserve its original fast OEM-first behavior.
         try:
             probabilities = run_inference(
                 image,
@@ -1925,16 +2298,9 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     # at least one footprint.
     semantic_buildings = list(detections["building"])
 
-    if request.analysis_mode == "standard":
-        # Preserve the current Standard execution order exactly.
-        try:
-            microsoft_buildings = fetch_microsoft_buildings()
-        except Exception as error:
-            print(f"Microsoft building lookup failed: {error}")
-
-    elif request.analysis_mode == "faster":
-        # Preserve Faster V1 exactly: Microsoft and Sentinel remain
-        # parallel with each other after fast OpenEarthMap inference.
+    if request.analysis_mode == "balanced":
+        # New Balanced = former Faster:
+        # Microsoft + Sentinel run together after fast OEM.
         external_started = time.perf_counter()
 
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1966,12 +2332,12 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
                 )
 
         print(
-            "PERF External parallel wall: "
+            "PERF Balanced external parallel wall: "
             f"{time.perf_counter() - external_started:.2f}s"
         )
 
-    # Balanced already has Microsoft + Sentinel results from the
-    # overlapped stage above. Nothing is recomputed here.
+    # Standard and Faster already received both external sources
+    # during the overlapped stage above.
 
     # Water V2 needs the Microsoft mask before final building fusion.
     building_exclusion_mask = (
@@ -2009,16 +2375,8 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         iterations=1,
     ).astype(bool) & selected_mask
 
-    if request.analysis_mode == "standard":
-        # Standard retains the original sequential Sentinel stage.
-        try:
-            sentinel_water_prior, sentinel_water_metadata = (
-                fetch_sentinel_water()
-            )
-            water_detection_status = "complete"
-        except Exception as error:
-            water_detection_detail = str(error)
-            print(f"Sentinel-2 water confirmation unavailable: {error}")
+    # Microsoft and Sentinel are already ready for every mode here.
+    # Do not fetch either source a second time.
 
     refined_water_mask, water_confidence, water_diagnostics = refine_water_mask(
         image=image,
@@ -2038,7 +2396,7 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     # Only extra water components are considered.
     # Fast crops/buildings are completely ignored.
     # ------------------------------------------------------------
-    if request.analysis_mode == "balanced":
+    if request.analysis_mode == "standard":
         print(
             "WATER SCOUT V3: running fast one-view "
             "OpenEarthMap for water only"
@@ -2166,31 +2524,15 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         minimum_area_m2=120.0,
         max_features=MAX_FEATURES_PER_CLASS,
     )
+    # The old Standard DAv2 confirmation path is no longer exposed
+    # by any analysis mode. Visible-field geometry remains unchanged.
     dav2_fields: list[dict[str, Any]] = []
 
-    if request.analysis_mode == "standard":
-        # Standard preserves the existing DAv2 confirmation stage.
-        try:
-            dav2_fields = get_field_boundaries(
-                boundary,
-                box,
-                image=image,
-                probabilities=probabilities,
-                selected_mask=selected_mask,
-                excluded_mask=crop_exclusion_mask,
-                max_features=MAX_FEATURES_PER_CLASS,
-            )
-        except Exception as error:
-            crop_detection_status = "visible-boundary-only"
-            crop_detection_detail = str(error)
-            print(f"DelineateAnythingV2 field detection failed: {error}")
-    else:
-        # Current merge logic never lets DAv2 create/delete/reshape fields.
-        # It only contributes a small confidence confirmation boost.
-        print(
-            "DAV2 SKIPPED BY MODE: "
-            f"{request.analysis_mode}"
-        )
+    print(
+        "DAV2 SKIPPED BY MODE: "
+        f"{request.analysis_mode}"
+    )
+
     field_boundaries = merge_field_boundaries(
         dav2_fields,
         visible_fields,
@@ -2262,8 +2604,8 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
             **image_quality,
         },
         "model": {
-            "name": "OpenEarthMap + DAv2 visible-field fusion + Sentinel-2 NDWI",
-            "checkpoint": "OpenEarthMap fold 1 + cached DAv2 weights",
+            "name": "OpenEarthMap + visible-field fusion + Sentinel-2 NDWI",
+            "checkpoint": "OpenEarthMap fold 1",
             "input": "512 × 512 Esri RGB",
             "test_time_augmentation": effective_quality == "accurate",
             "source": "https://github.com/sebastianbahr/OpenEarthMap",

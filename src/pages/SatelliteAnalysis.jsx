@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import L from 'leaflet'
 import {
@@ -15,10 +15,12 @@ import {
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowLeft,
   ArrowRight,
   BrainCircuit,
   Building2,
   Check,
+  ChevronDown,
   CloudRain,
   Crosshair,
   Download,
@@ -32,6 +34,7 @@ import {
   LocateFixed,
   Map,
   MapPin,
+  Maximize2,
   MousePointer2,
   RefreshCw,
   Satellite,
@@ -68,9 +71,9 @@ import './SatelliteAnalysis.css'
 const INITIAL_CENTER = [24.3745, 88.6042]
 
 const ANALYSIS_MODE_ESTIMATES = {
-  faster: '~1m 30s',
-  balanced: '~2m 55s',
-  standard: '~4m 14s',
+  faster: '~30–45s',
+  balanced: '~45–60s',
+  standard: '~1m 15s–1m 40s',
 }
 
 function formatAnalysisDuration(seconds) {
@@ -125,6 +128,30 @@ function MapSynchronizer({ center, zoom }) {
 
   return null
 }
+
+function MapResizeController({ fullscreen }) {
+  const map = useMap()
+
+  useEffect(() => {
+    const invalidate = () => {
+      map.invalidateSize({ animate: false })
+    }
+
+    const firstTimer = window.setTimeout(invalidate, 40)
+    const secondTimer = window.setTimeout(invalidate, 180)
+
+    window.addEventListener('resize', invalidate)
+
+    return () => {
+      window.clearTimeout(firstTimer)
+      window.clearTimeout(secondTimer)
+      window.removeEventListener('resize', invalidate)
+    }
+  }, [fullscreen, map])
+
+  return null
+}
+
 
 function BoundaryClickHandler({ enabled, onPoint }) {
   useMapEvents({
@@ -194,6 +221,9 @@ function SatelliteAnalysis() {
   const [mapZoom, setMapZoom] = useState(17)
   const [mapStyle, setMapStyle] = useState('satellite')
   const [mapLocked, setMapLocked] = useState(false)
+  const [isMapFullscreen, setIsMapFullscreen] = useState(false)
+  const [layersOpen, setLayersOpen] = useState(false)
+  const mapCardRef = useRef(null)
   const [selectedLocation, setSelectedLocation] = useState({
     name: 'Rajshahi, Bangladesh',
     coordinates: INITIAL_CENTER,
@@ -216,7 +246,7 @@ function SatelliteAnalysis() {
     water: true,
     building: true,
   })
-  // Standard mode preserves the existing detection threshold exactly.
+  // All three modes preserve the existing 55% detection threshold.
   const confidenceThreshold = 0.55
   const [analysisMode, setAnalysisMode] = useState('standard')
   const [analysisStartedAt, setAnalysisStartedAt] = useState(null)
@@ -235,6 +265,64 @@ function SatelliteAnalysis() {
   const [weatherLoading, setWeatherLoading] = useState(true)
   const [history, setHistory] = useState(() => getAnalysisHistory(user?.id))
   const [currentHistoryRecord, setCurrentHistoryRecord] = useState(null)
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      const fullscreenElement =
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        null
+
+      const active =
+        Boolean(mapCardRef.current) &&
+        fullscreenElement === mapCardRef.current
+
+      setIsMapFullscreen(active)
+
+      // Leaflet needs its container size recalculated after
+      // entering or leaving native browser fullscreen.
+      window.setTimeout(() => {
+        window.dispatchEvent(new Event('resize'))
+      }, 40)
+
+      window.setTimeout(() => {
+        window.dispatchEvent(new Event('resize'))
+      }, 180)
+    }
+
+    document.addEventListener(
+      'fullscreenchange',
+      syncFullscreenState,
+    )
+
+    document.addEventListener(
+      'webkitfullscreenchange',
+      syncFullscreenState,
+    )
+
+    return () => {
+      document.removeEventListener(
+        'fullscreenchange',
+        syncFullscreenState,
+      )
+
+      document.removeEventListener(
+        'webkitfullscreenchange',
+        syncFullscreenState,
+      )
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isMapFullscreen) return undefined
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [isMapFullscreen])
 
   const boundaryMetrics = useMemo(
     () => calculateBoundaryMetrics(boundary),
@@ -274,7 +362,7 @@ function SatelliteAnalysis() {
       ? 'Live timer while detection runs'
       : completedAnalysisTime
         ? 'Measured for the latest completed detection'
-        : 'Standard mode benchmark'
+        : 'Selected mode estimate'
 
   const analysisTimeValue =
     analysisStatus === 'running'
@@ -464,9 +552,9 @@ function SatelliteAnalysis() {
       )
       return
     }
-    setMapLocked(true)
+    setMapLocked(false)
     setAnalysisMessage(
-      `Boundary ready at about ${boundaryMetrics.estimatedGsdMetres.toFixed(2)} m/pixel. Locked Map is active for the fixed analysis area.`,
+      `Boundary ready at about ${boundaryMetrics.estimatedGsdMetres.toFixed(2)} m/pixel. You can continue to pan or zoom the map before running detection.`,
     )
   }
 
@@ -479,6 +567,63 @@ function SatelliteAnalysis() {
   function clearBoundary() {
     resetAnalysis('Boundary cleared. Select Draw boundary to start again.')
   }
+
+  async function toggleMapFullscreen() {
+    const mapCard = mapCardRef.current
+
+    if (!mapCard) return
+
+    const fullscreenElement =
+      document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      null
+
+    try {
+      if (fullscreenElement === mapCard) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen()
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen()
+        }
+
+        setIsMapFullscreen(false)
+        return
+      }
+
+      // If some other browser element is in fullscreen, leave it first.
+      if (fullscreenElement) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen()
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen()
+        }
+      }
+
+      if (mapCard.requestFullscreen) {
+        await mapCard.requestFullscreen()
+      } else if (mapCard.webkitRequestFullscreen) {
+        mapCard.webkitRequestFullscreen()
+      } else {
+        setAnalysisMessage(
+          'This browser does not support full-screen map mode.',
+        )
+        return
+      }
+
+      setIsMapFullscreen(true)
+
+      window.setTimeout(() => {
+        window.dispatchEvent(new Event('resize'))
+      }, 80)
+    } catch (error) {
+      console.error('Map fullscreen failed:', error)
+
+      setAnalysisMessage(
+        'Full-screen map could not be opened. Please allow full-screen access and try again.',
+      )
+    }
+  }
+
 
   async function handlePrepareModel() {
     if (!serviceStatus.online) {
@@ -540,7 +685,7 @@ function SatelliteAnalysis() {
         selectedLocation.name,
         {
           confidenceThreshold,
-          quality: analysisMode === 'faster' ? 'fast' : 'accurate',
+          quality: analysisMode === 'standard' ? 'accurate' : 'fast',
           analysisMode,
         },
       )
@@ -844,7 +989,10 @@ function SatelliteAnalysis() {
         </aside>
 
         <section className="satellite-map-column">
-          <article className="satellite-map-card">
+          <article
+            ref={mapCardRef}
+            className={`satellite-map-card${isMapFullscreen ? ' map-card-fullscreen' : ''}`}
+          >
             <header className="satellite-map-toolbar no-print">
               <div>
                 <span><Satellite size={19} /></span>
@@ -876,6 +1024,7 @@ function SatelliteAnalysis() {
                 className="satellite-leaflet-map"
               >
                 <MapSynchronizer center={mapCenter} zoom={mapZoom} />
+                <MapResizeController fullscreen={isMapFullscreen} />
                 <MapInteractionController locked={mapLocked && !drawing} />
                 <BoundaryClickHandler enabled={drawing} onPoint={addBoundaryPoint} />
                 {!mapLocked && <ZoomControl position="bottomright" />}
@@ -921,37 +1070,146 @@ function SatelliteAnalysis() {
                 ))}
               </MapContainer>
 
+              <button
+                className="map-fullscreen-toggle no-print"
+                type="button"
+                onClick={toggleMapFullscreen}
+                aria-label={isMapFullscreen ? 'Exit full screen map' : 'Open full screen map'}
+                title={isMapFullscreen ? 'Back to workspace' : 'Full screen map'}
+              >
+                {isMapFullscreen ? <ArrowLeft size={20} /> : <Maximize2 size={20} />}
+              </button>
+
+              {isMapFullscreen && (
+                <div className="map-fullscreen-draw-tools no-print" aria-label="Map drawing tools">
+                  <button
+                    type="button"
+                    onClick={startDrawing}
+                    title="Draw new boundary"
+                    aria-label="Draw new boundary"
+                  >
+                    <MousePointer2 size={19} />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={undoBoundaryPoint}
+                    disabled={!boundary.length}
+                    title="Undo last point"
+                    aria-label="Undo last point"
+                  >
+                    <Undo2 size={19} />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={finishDrawing}
+                    disabled={boundary.length < 3 || !drawing}
+                    title="Finish boundary"
+                    aria-label="Finish boundary"
+                  >
+                    <Check size={19} />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={clearBoundary}
+                    disabled={!boundary.length}
+                    title="Clear boundary"
+                    aria-label="Clear boundary"
+                  >
+                    <X size={19} />
+                  </button>
+
+                  <div
+                    className="map-fullscreen-point-count"
+                    title={`${boundary.length} boundary points`}
+                    aria-label={`${boundary.length} boundary points`}
+                  >
+                    <MapPin size={17} />
+                    <strong>{boundary.length}</strong>
+                  </div>
+                </div>
+              )}
+
               {drawing && (
                 <div className="map-drawing-instruction">
                   <MousePointer2 size={16} /> Click map points, then choose Finish
                 </div>
               )}
 
-              <div className="map-legend no-print">
-                <header>
-                  <strong>Detection layers</strong>
-                  <label>
-                    <input type="checkbox" checked={showOverlay} onChange={(event) => setShowOverlay(event.target.checked)} />
-                    Show
-                  </label>
-                </header>
-                {Object.entries(classDetails).map(([classKey, details]) => {
-                  const Icon = details.icon
-                  return (
-                    <button
-                      key={classKey}
-                      className={visibleClasses[classKey] ? 'active' : ''}
-                      type="button"
-                      onClick={() => toggleClass(classKey)}
-                      disabled={!analysis}
-                    >
-                      <i style={{ background: details.colour }} />
-                      <Icon size={14} />
-                      <span>{details.label}</span>
-                      {analysis && <strong>{analysis.counts[classKey]}</strong>}
-                    </button>
-                  )
-                })}
+              <div
+                className={`map-legend no-print${layersOpen ? ' map-legend-open' : ''}${analysis && showOverlay ? ' map-legend-detected' : ''}`}
+              >
+                <div className="map-legend-split">
+                  <button
+                    className="map-legend-visibility-toggle"
+                    type="button"
+                    onClick={() => {
+                      if (!analysis) return
+                      setShowOverlay((current) => !current)
+                    }}
+                    disabled={!analysis}
+                    aria-pressed={Boolean(analysis && showOverlay)}
+                    aria-label={
+                      analysis && showOverlay
+                        ? 'Hide detections and compare original map'
+                        : 'Show detections'
+                    }
+                    title={
+                      analysis && showOverlay
+                        ? 'Show original map'
+                        : analysis
+                          ? 'Show detections'
+                          : 'Detection results are not available yet'
+                    }
+                  >
+                    <Layers3 size={15} />
+                    <strong>Detection layers</strong>
+                  </button>
+
+                  <button
+                    className="map-legend-menu-toggle"
+                    type="button"
+                    onClick={() => setLayersOpen((current) => !current)}
+                    aria-expanded={layersOpen}
+                    aria-label="Open detection layer options"
+                    title="Detection layer options"
+                  >
+                    <ChevronDown size={16} />
+                  </button>
+                </div>
+
+                {layersOpen && (
+                  <div className="map-legend-menu">
+                    <label className="map-legend-show">
+                      <input
+                        type="checkbox"
+                        checked={showOverlay}
+                        onChange={(event) => setShowOverlay(event.target.checked)}
+                      />
+                      <span>Show detections</span>
+                    </label>
+
+                    {Object.entries(classDetails).map(([classKey, details]) => {
+                      const Icon = details.icon
+                      return (
+                        <button
+                          key={classKey}
+                          className={visibleClasses[classKey] ? 'active' : ''}
+                          type="button"
+                          onClick={() => toggleClass(classKey)}
+                          disabled={!analysis}
+                        >
+                          <i style={{ background: details.colour }} />
+                          <Icon size={14} />
+                          <span>{details.label}</span>
+                          {analysis && <strong>{analysis.counts[classKey]}</strong>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             </div>
 
