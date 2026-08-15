@@ -13,6 +13,8 @@ import io
 import math
 import os
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -33,6 +35,43 @@ from field_detector import (
     get_visible_field_boundaries,
 )
 from imagery_tiles import fetch_esri_world_imagery
+
+# PERF TIMING V1 — measurement only; does not change detection logic.
+def _timed_stage(
+    label: str,
+    function: Callable[..., Any] | None = None,
+) -> Callable[..., Any]:
+    """Measure a stage without changing its behaviour.
+
+    Supports both:
+        _timed_stage("Stage", function)
+        @_timed_stage("Stage")
+    """
+
+    def decorator(target: Callable[..., Any]) -> Callable[..., Any]:
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            started = time.perf_counter()
+            try:
+                return target(*args, **kwargs)
+            finally:
+                print(
+                    f"PERF {label}: "
+                    f"{time.perf_counter() - started:.2f}s"
+                )
+
+        return wrapper
+
+    if function is None:
+        return decorator
+
+    return decorator(function)
+
+
+get_building_footprints = _timed_stage("Microsoft buildings", get_building_footprints)
+get_sentinel_water_prior = _timed_stage("Sentinel-2", get_sentinel_water_prior)
+get_visible_field_boundaries = _timed_stage("Visible fields", get_visible_field_boundaries)
+get_field_boundaries = _timed_stage("DAv2", get_field_boundaries)
+fetch_esri_world_imagery = _timed_stage("Esri imagery", fetch_esri_world_imagery)
 
 
 SERVICE_DIRECTORY = Path(__file__).resolve().parent
@@ -157,6 +196,7 @@ class AnalyzeRequest(BaseModel):
     location: str | None = Field(default=None, max_length=300)
     confidence_threshold: float = Field(default=0.55, ge=0.30, le=0.95)
     quality: Literal["accurate", "fast"] = "accurate"
+    analysis_mode: Literal["standard", "balanced", "faster"] = "standard"
 
 
 def model_files_ready() -> bool:
@@ -540,6 +580,7 @@ def regions_pixel_mask(
 
 
 
+@_timed_stage("Building fusion")
 def merge_building_detections(
     microsoft_buildings: list[dict[str, Any]],
     semantic_buildings: list[dict[str, Any]],
@@ -920,6 +961,7 @@ def _call_signature(signature: Any, image_batch: np.ndarray) -> np.ndarray:
     return np.asarray(output_tensor.numpy())
 
 
+@_timed_stage("OpenEarthMap")
 def run_inference(image: Image.Image, quality: str) -> np.ndarray:
     _, signature = get_model()
     base = np.asarray(image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.BICUBIC))
@@ -964,6 +1006,7 @@ def clean_binary_mask(binary_mask: np.ndarray, settings: dict[str, Any]) -> np.n
     return cleaned > 0
 
 
+@_timed_stage("Water V2")
 def refine_water_mask(
     image: Image.Image,
     probabilities: np.ndarray,
@@ -1330,8 +1373,23 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     image = fetch_satellite_image(box)
     selected_mask = polygon_pixel_mask(boundary, box, image.size)
 
+    # Standard is intentionally locked to the existing accurate pipeline.
+    # Balanced also preserves accurate four-view OpenEarthMap inference.
+    # Faster uses the already-supported single-view inference path.
+    effective_quality = (
+        "fast"
+        if request.analysis_mode == "faster"
+        else "accurate"
+    )
+
+    print(
+        "ANALYSIS MODE: "
+        f"{request.analysis_mode}, "
+        f"openearthmap={effective_quality}"
+    )
+
     try:
-        probabilities = run_inference(image, request.quality)
+        probabilities = run_inference(image, effective_quality)
     except ModelSetupError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
@@ -1381,15 +1439,62 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     semantic_buildings = list(detections["building"])
     microsoft_buildings: list[dict[str, Any]] = []
 
-    try:
-        microsoft_buildings = get_building_footprints(
+    sentinel_water_prior: np.ndarray | None = None
+    sentinel_water_metadata: dict[str, Any] = {}
+    water_detection_status = "openearthmap-only"
+    water_detection_detail = ""
+
+    def fetch_microsoft_buildings() -> list[dict[str, Any]]:
+        return get_building_footprints(
             boundary,
             box,
             max_features=MAX_FEATURES_PER_CLASS,
             min_confidence=0.85,
         )
-    except Exception as error:
-        print(f"Microsoft building lookup failed: {error}")
+
+    def fetch_sentinel_water() -> tuple[np.ndarray, dict[str, Any]]:
+        return get_sentinel_water_prior(
+            box,
+            selected_mask.shape[::-1],
+        )
+
+    if request.analysis_mode == "standard":
+        # Preserve the current Standard execution order exactly.
+        try:
+            microsoft_buildings = fetch_microsoft_buildings()
+        except Exception as error:
+            print(f"Microsoft building lookup failed: {error}")
+    else:
+        # Balanced/Faster: these two external stages are independent,
+        # so waiting for them sequentially wastes time.
+        external_started = time.perf_counter()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            microsoft_future = executor.submit(fetch_microsoft_buildings)
+            sentinel_future = executor.submit(fetch_sentinel_water)
+
+            try:
+                microsoft_buildings = microsoft_future.result()
+            except Exception as error:
+                print(f"Microsoft building lookup failed: {error}")
+
+            try:
+                (
+                    sentinel_water_prior,
+                    sentinel_water_metadata,
+                ) = sentinel_future.result()
+                water_detection_status = "complete"
+            except Exception as error:
+                water_detection_detail = str(error)
+                print(
+                    "Sentinel-2 water confirmation unavailable: "
+                    f"{error}"
+                )
+
+        print(
+            "PERF External parallel wall: "
+            f"{time.perf_counter() - external_started:.2f}s"
+        )
 
     # Water V2 needs the Microsoft mask before final building fusion.
     building_exclusion_mask = (
@@ -1427,19 +1532,16 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         iterations=1,
     ).astype(bool) & selected_mask
 
-    sentinel_water_prior: np.ndarray | None = None
-    sentinel_water_metadata: dict[str, Any] = {}
-    water_detection_status = "openearthmap-only"
-    water_detection_detail = ""
-    try:
-        sentinel_water_prior, sentinel_water_metadata = get_sentinel_water_prior(
-            box,
-            selected_mask.shape[::-1],
-        )
-        water_detection_status = "complete"
-    except Exception as error:
-        water_detection_detail = str(error)
-        print(f"Sentinel-2 water confirmation unavailable: {error}")
+    if request.analysis_mode == "standard":
+        # Standard retains the original sequential Sentinel stage.
+        try:
+            sentinel_water_prior, sentinel_water_metadata = (
+                fetch_sentinel_water()
+            )
+            water_detection_status = "complete"
+        except Exception as error:
+            water_detection_detail = str(error)
+            print(f"Sentinel-2 water confirmation unavailable: {error}")
 
     refined_water_mask, water_confidence, water_diagnostics = refine_water_mask(
         image=image,
@@ -1517,20 +1619,30 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         max_features=MAX_FEATURES_PER_CLASS,
     )
     dav2_fields: list[dict[str, Any]] = []
-    try:
-        dav2_fields = get_field_boundaries(
-            boundary,
-            box,
-            image=image,
-            probabilities=probabilities,
-            selected_mask=selected_mask,
-            excluded_mask=crop_exclusion_mask,
-            max_features=MAX_FEATURES_PER_CLASS,
+
+    if request.analysis_mode == "standard":
+        # Standard preserves the existing DAv2 confirmation stage.
+        try:
+            dav2_fields = get_field_boundaries(
+                boundary,
+                box,
+                image=image,
+                probabilities=probabilities,
+                selected_mask=selected_mask,
+                excluded_mask=crop_exclusion_mask,
+                max_features=MAX_FEATURES_PER_CLASS,
+            )
+        except Exception as error:
+            crop_detection_status = "visible-boundary-only"
+            crop_detection_detail = str(error)
+            print(f"DelineateAnythingV2 field detection failed: {error}")
+    else:
+        # Current merge logic never lets DAv2 create/delete/reshape fields.
+        # It only contributes a small confidence confirmation boost.
+        print(
+            "DAV2 SKIPPED BY MODE: "
+            f"{request.analysis_mode}"
         )
-    except Exception as error:
-        crop_detection_status = "visible-boundary-only"
-        crop_detection_detail = str(error)
-        print(f"DelineateAnythingV2 field detection failed: {error}")
     field_boundaries = merge_field_boundaries(
         dav2_fields,
         visible_fields,
@@ -1567,6 +1679,7 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
 
     return {
         "mode": "ml",
+        "analysis_mode": request.analysis_mode,
         "location": request.location,
         "area_hectares": round(polygon_area_hectares(boundary), 2),
         "bbox": box,
@@ -1604,7 +1717,7 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
             "name": "OpenEarthMap + DAv2 visible-field fusion + Sentinel-2 NDWI",
             "checkpoint": "OpenEarthMap fold 1 + cached DAv2 weights",
             "input": "512 × 512 Esri RGB",
-            "test_time_augmentation": request.quality == "accurate",
+            "test_time_augmentation": effective_quality == "accurate",
             "source": "https://github.com/sebastianbahr/OpenEarthMap",
             "benchmark": MODEL_BENCHMARK,
         },

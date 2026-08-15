@@ -67,6 +67,24 @@ import './SatelliteAnalysis.css'
 
 const INITIAL_CENTER = [24.3745, 88.6042]
 
+const ANALYSIS_MODE_ESTIMATES = {
+  faster: '~1m 30s',
+  balanced: '~2m 55s',
+  standard: '~4m 14s',
+}
+
+function formatAnalysisDuration(seconds) {
+  if (!Number.isFinite(seconds)) return '—'
+
+  const totalSeconds = Math.max(0, Math.round(seconds))
+  const minutes = Math.floor(totalSeconds / 60)
+  const remainingSeconds = totalSeconds % 60
+
+  if (minutes <= 0) return `${remainingSeconds}s`
+
+  return `${minutes}m ${String(remainingSeconds).padStart(2, '0')}s`
+}
+
 const classDetails = {
   crop: {
     label: 'Crop zones',
@@ -198,7 +216,11 @@ function SatelliteAnalysis() {
     water: true,
     building: true,
   })
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.55)
+  // Standard mode preserves the existing detection threshold exactly.
+  const confidenceThreshold = 0.55
+  const [analysisMode, setAnalysisMode] = useState('standard')
+  const [analysisStartedAt, setAnalysisStartedAt] = useState(null)
+  const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(null)
   const [serviceStatus, setServiceStatus] = useState({
     online: false,
     modelReady: false,
@@ -218,6 +240,48 @@ function SatelliteAnalysis() {
     () => calculateBoundaryMetrics(boundary),
     [boundary],
   )
+
+  useEffect(() => {
+    if (analysisStatus !== 'running' || analysisStartedAt === null) {
+      return undefined
+    }
+
+    const updateElapsedTime = () => {
+      setAnalysisElapsedSeconds(
+        (performance.now() - analysisStartedAt) / 1000,
+      )
+    }
+
+    updateElapsedTime()
+    const intervalId = window.setInterval(updateElapsedTime, 1000)
+
+    return () => window.clearInterval(intervalId)
+  }, [analysisStatus, analysisStartedAt])
+
+  const completedAnalysisTime =
+    analysisStatus === 'complete' &&
+    Number.isFinite(analysisElapsedSeconds)
+
+  const analysisTimeHeading =
+    analysisStatus === 'running'
+      ? 'Elapsed analysis time'
+      : completedAnalysisTime
+        ? 'Actual analysis time'
+        : 'Estimated analysis time'
+
+  const analysisTimeDetail =
+    analysisStatus === 'running'
+      ? 'Live timer while detection runs'
+      : completedAnalysisTime
+        ? 'Measured for the latest completed detection'
+        : 'Standard mode benchmark'
+
+  const analysisTimeValue =
+    analysisStatus === 'running'
+      ? formatAnalysisDuration(analysisElapsedSeconds ?? 0)
+      : completedAnalysisTime
+        ? formatAnalysisDuration(analysisElapsedSeconds)
+        : ANALYSIS_MODE_ESTIMATES[analysisMode]
   const overlayBounds = analysis?.bbox
     ? [
         [analysis.bbox.south, analysis.bbox.west],
@@ -458,9 +522,13 @@ function SatelliteAnalysis() {
       return
     }
 
+    const startedAt = performance.now()
+
     setDrawing(false)
     setAnalysisStatus('running')
     setAnalysis(null)
+    setAnalysisStartedAt(startedAt)
+    setAnalysisElapsedSeconds(0)
     setActiveResultTab('overview')
     setAnalysisMessage(
       'Fetching the exact RGB map image and running four-view OpenEarthMap inference...',
@@ -470,9 +538,17 @@ function SatelliteAnalysis() {
       const result = await analyzeSatelliteBoundary(
         boundary,
         selectedLocation.name,
-        { confidenceThreshold, quality: 'accurate' },
+        {
+          confidenceThreshold,
+          quality: analysisMode === 'faster' ? 'fast' : 'accurate',
+          analysisMode,
+        },
       )
       setAnalysis(result)
+      setAnalysisElapsedSeconds(
+        (performance.now() - startedAt) / 1000,
+      )
+      setAnalysisStartedAt(null)
       setAnalysisStatus('complete')
       const record = compactAnalysisForHistory({
         analysis: result,
@@ -498,6 +574,10 @@ function SatelliteAnalysis() {
         )
       }
     } catch (error) {
+      setAnalysisElapsedSeconds(
+        (performance.now() - startedAt) / 1000,
+      )
+      setAnalysisStartedAt(null)
       setAnalysisStatus('error')
       setAnalysisMessage(error.message || 'Unable to complete real AI analysis.')
     }
@@ -695,27 +775,67 @@ function SatelliteAnalysis() {
             )}
           </article>
 
-          <article className="satellite-panel confidence-panel">
-            <div className="confidence-heading">
-              <div><strong>Detection threshold</strong><small>Higher is stricter, but may miss objects</small></div>
-              <span>{Math.round(confidenceThreshold * 100)}%</span>
+          <article className="satellite-panel analysis-mode-panel">
+            <div className="analysis-mode-heading">
+              <div>
+                <strong>4. Analysis mode</strong>
+                <small>Choose the mode that fits your priority.</small>
+              </div>
             </div>
-            <input
-              type="range"
-              min="40"
-              max="80"
-              step="5"
-              value={Math.round(confidenceThreshold * 100)}
-              onChange={(event) => setConfidenceThreshold(Number(event.target.value) / 100)}
-              aria-label="Detection confidence threshold"
-            />
-            <div className="threshold-labels"><span>More detections</span><span>Stricter</span></div>
-          </article>
 
-          <button className="run-analysis-button" type="button" onClick={runAnalysis} disabled={runDisabled}>
-            {analysisStatus === 'running' ? <LoaderCircle className="satellite-spinner" size={20} /> : <BrainCircuit size={20} />}
-            {analysisStatus === 'running' ? 'Running real AI...' : 'Run real AI detection'}
-          </button>
+            <div className="analysis-mode-list">
+              <button
+                className={`analysis-mode-option ${analysisMode === 'faster' ? 'active' : ''}`}
+                type="button"
+                onClick={() => setAnalysisMode('faster')}
+                aria-pressed={analysisMode === 'faster'}
+              >
+                <span className="analysis-mode-icon">⚡</span>
+                <span className="analysis-mode-copy">
+                  <span className="analysis-mode-title">Faster</span>
+                  <small>
+                    Estimated time: {ANALYSIS_MODE_ESTIMATES.faster}
+                  </small>
+                </span>
+                <span className={`analysis-mode-radio ${analysisMode === 'faster' ? 'selected' : ''}`} />
+              </button>
+
+              <button
+                className={`analysis-mode-option ${analysisMode === 'balanced' ? 'active' : ''}`}
+                type="button"
+                onClick={() => setAnalysisMode('balanced')}
+                aria-pressed={analysisMode === 'balanced'}
+              >
+                <span className="analysis-mode-icon">⚖</span>
+                <span className="analysis-mode-copy">
+                  <span className="analysis-mode-title">
+                    Balanced
+                    <em>Recommended</em>
+                  </span>
+                  <small>
+                    Estimated time: {ANALYSIS_MODE_ESTIMATES.balanced}
+                  </small>
+                </span>
+                <span className={`analysis-mode-radio ${analysisMode === 'balanced' ? 'selected' : ''}`} />
+              </button>
+
+              <button
+                className={`analysis-mode-option ${analysisMode === 'standard' ? 'active' : ''}`}
+                type="button"
+                onClick={() => setAnalysisMode('standard')}
+                aria-pressed={analysisMode === 'standard'}
+              >
+                <span className="analysis-mode-icon">🎯</span>
+                <span className="analysis-mode-copy">
+                  <span className="analysis-mode-title">Standard</span>
+                  <small>
+                    Estimated time: {ANALYSIS_MODE_ESTIMATES.standard}
+                  </small>
+                </span>
+                <span className={`analysis-mode-radio ${analysisMode === 'standard' ? 'selected' : ''}`} />
+              </button>
+            </div>
+          </article>
 
           <div className={`satellite-message message-${analysisStatus}`} role="status">
             {analysisStatus === 'error' ? <AlertCircle size={17} /> : <Sparkles size={17} />}
@@ -847,13 +967,41 @@ function SatelliteAnalysis() {
             </footer>
           </article>
 
-          <article className="satellite-reality-note">
-            <AlertTriangle size={19} />
-            <div>
-              <strong>What this system can and cannot claim</strong>
-              <p>The model produces real pixel classifications. It does not know legal parcel lines, and touching buildings or neighbouring crop plots can merge. Bangladesh-labelled fine-tuning is still required before high-stakes use.</p>
-            </div>
-          </article>
+          <div className="analysis-action-row">
+            <button
+              className="run-analysis-button"
+              type="button"
+              onClick={runAnalysis}
+              disabled={runDisabled}
+            >
+              {analysisStatus === 'running'
+                ? <LoaderCircle className="satellite-spinner" size={20} />
+                : <BrainCircuit size={20} />}
+              {analysisStatus === 'running'
+                ? 'Running real AI...'
+                : 'Run real AI detection'}
+            </button>
+
+            <article className="satellite-panel analysis-time-panel">
+              <div className="analysis-time-icon">⏱</div>
+
+              <div className="analysis-time-copy">
+                <strong>{analysisTimeHeading}</strong>
+                <small>{analysisTimeDetail}</small>
+              </div>
+
+              <div className="analysis-time-value">
+                <strong>{analysisTimeValue}</strong>
+                <small>
+                  {analysisStatus === 'running'
+                    ? 'counting now'
+                    : completedAnalysisTime
+                      ? 'actual duration'
+                      : 'varies by area'}
+                </small>
+              </div>
+            </article>
+          </div>
         </section>
 
         <aside className="satellite-results-column">

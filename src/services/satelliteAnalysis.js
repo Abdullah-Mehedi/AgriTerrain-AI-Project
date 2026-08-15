@@ -258,7 +258,11 @@ function normaliseAnalysis(result, boundary, location) {
 export async function analyzeSatelliteBoundary(
   boundary,
   location,
-  { confidenceThreshold = 0.55, quality = 'accurate' } = {},
+  {
+    confidenceThreshold = 0.55,
+    quality = 'accurate',
+    analysisMode = 'standard',
+  } = {},
 ) {
   const metrics = calculateBoundaryMetrics(boundary)
   if (!metrics.validForAnalysis) {
@@ -279,6 +283,7 @@ export async function analyzeSatelliteBoundary(
           location,
           confidence_threshold: confidenceThreshold,
           quality,
+          analysis_mode: analysisMode,
         }),
       },
       15 * 60 * 1000,
