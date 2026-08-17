@@ -438,3 +438,105 @@
     padding: 0;
   }
 }
+
+/* === AGRITERRAIN STEP1 WORKSPACE START === */
+/* Header must scroll naturally with the page. */
+.workspace-header {
+  position: static !important;
+  top: auto !important;
+}
+
+/* General appears before Workspace. */
+.workspace-sidebar-notification {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  color: rgba(255, 255, 255, .73);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: .18s ease;
+}
+
+.workspace-sidebar-notification:hover,
+.workspace-sidebar-notification[aria-expanded="true"] {
+  color: white;
+  background: rgba(255, 255, 255, .075);
+}
+
+.workspace-notification-panel {
+  margin: 8px 0 2px;
+  padding: 12px;
+  color: rgba(255,255,255,.72);
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px;
+}
+
+.workspace-notification-panel strong,
+.workspace-notification-panel p,
+.workspace-notification-panel small {
+  display: block;
+}
+
+.workspace-notification-panel strong {
+  color: white;
+  font-size: 11px;
+}
+
+.workspace-notification-panel p {
+  margin: 4px 0 2px;
+  font-size: 11px;
+}
+
+.workspace-notification-panel small {
+  color: rgba(255,255,255,.48);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.workspace-avatar {
+  overflow: hidden;
+}
+
+.workspace-avatar img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+/* === AGRITERRAIN STEP1 WORKSPACE END === */
+
+/* === AGRITERRAIN SIDEBAR BOTTOM FIX START === */
+.workspace-sidebar {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-sidebar-footer {
+  margin-top: auto !important;
+}
+
+.workspace-account {
+  flex-shrink: 0;
+}
+
+.workspace-logout {
+  flex-shrink: 0;
+}
+
+/* Broader AgriTerrain identity instead of crop-only branding. */
+.workspace-brand-icon {
+  color: #073d2a;
+  background: linear-gradient(135deg, #a7ef72, #83df58);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 22px rgba(76, 203, 91, 0.14);
+}
+/* === AGRITERRAIN SIDEBAR BOTTOM FIX END === */

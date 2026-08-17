@@ -106,8 +106,10 @@ a {
   display: grid;
   place-items: center;
   color: white;
-  background: var(--green);
+  background: linear-gradient(135deg, var(--green), #0b6d45);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 12px;
+  box-shadow: 0 7px 18px rgba(10, 112, 66, 0.16);
 }
 
 .nav-links {
@@ -414,10 +416,8 @@ footer {
 }
 
 .footer-content {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 70px;
-  padding-bottom: 45px;
+  display: block;
+  padding-bottom: 38px;
 }
 
 .footer-logo {
@@ -425,7 +425,8 @@ footer {
 }
 
 .footer-content > div:first-child p {
-  max-width: 520px;
+  max-width: 650px;
+  margin-top: 14px;
   line-height: 1.7;
 }
 

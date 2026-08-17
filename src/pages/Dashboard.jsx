@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Activity,
@@ -6,25 +6,37 @@ import {
   Bot,
   CalendarClock,
   CheckCircle2,
+  Check,
+  Clipboard,
   CloudRain,
   CloudSun,
   Droplets,
   FileText,
   History,
   Home,
+  ImagePlus,
   Leaf,
   Lightbulb,
   Map,
   MessageCircleQuestion,
+  Pencil,
   Satellite,
   ShieldAlert,
   Sparkles,
+  Trash2,
   UserRound,
   Waves,
   X,
 } from 'lucide-react'
 import WorkspaceShell from '../components/WorkspaceShell'
 import { useAuth } from '../context/auth-context'
+import { supabase } from '../lib/supabase'
+import {
+  deleteProfilePhoto,
+  getProfilePhoto,
+  PROFILE_PHOTO_EVENT,
+  saveProfilePhoto,
+} from '../services/profilePhoto'
 import './Dashboard.css'
 
 const fallbackAnalysis = {
@@ -49,12 +61,275 @@ function numeric(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback
 }
 
+
+function getInitials(name) {
+  return String(name || '')
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('')
+}
+
+function normaliseProfileImage(file) {
+  return new Promise((resolve, reject) => {
+    if (!file?.type?.startsWith('image/')) {
+      reject(new Error('Choose or paste an image file.'))
+      return
+    }
+
+    const reader = new FileReader()
+
+    reader.onerror = () =>
+      reject(new Error('Unable to read this image.'))
+
+    reader.onload = () => {
+      const image = new Image()
+
+      image.onerror = () =>
+        reject(new Error('Unable to open this image.'))
+
+      image.onload = () => {
+        const size = 320
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d')
+
+        if (!context) {
+          reject(new Error('Image processing is unavailable.'))
+          return
+        }
+
+        canvas.width = size
+        canvas.height = size
+
+        const scale = Math.max(
+          size / image.naturalWidth,
+          size / image.naturalHeight,
+        )
+
+        const width = image.naturalWidth * scale
+        const height = image.naturalHeight * scale
+
+        context.drawImage(
+          image,
+          (size - width) / 2,
+          (size - height) / 2,
+          width,
+          height,
+        )
+
+        resolve(canvas.toDataURL('image/jpeg', 0.86))
+      }
+
+      image.src = String(reader.result || '')
+    }
+
+    reader.readAsDataURL(file)
+  })
+}
+
 function Dashboard() {
   const { user } = useAuth()
   const [assistantOpen, setAssistantOpen] = useState(false)
+  const [profilePhoto, setProfilePhoto] = useState('')
+  const [profilePhotoMessage, setProfilePhotoMessage] = useState('')
+  const [profilePhotoBusy, setProfilePhotoBusy] = useState(false)
 
-  const fullName =
-    user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User'
+  const accountFullName =
+    user?.user_metadata?.full_name ||
+    user?.email?.split('@')[0] ||
+    'User'
+
+  const [profileName, setProfileName] = useState(accountFullName)
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState(accountFullName)
+  const [nameSaving, setNameSaving] = useState(false)
+  const [nameMessage, setNameMessage] = useState('')
+
+  const fullName = profileName || accountFullName
+
+
+  useEffect(() => {
+    let active = true
+    const key = String(user?.id || 'anonymous')
+
+    getProfilePhoto(user?.id).then((photo) => {
+      if (active) setProfilePhoto(photo)
+    })
+
+    function handleProfilePhotoChange(event) {
+      if (String(event.detail?.userId || '') !== key) return
+      setProfilePhoto(event.detail?.dataUrl || '')
+    }
+
+    window.addEventListener(
+      PROFILE_PHOTO_EVENT,
+      handleProfilePhotoChange,
+    )
+
+    return () => {
+      active = false
+      window.removeEventListener(
+        PROFILE_PHOTO_EVENT,
+        handleProfilePhotoChange,
+      )
+    }
+  }, [user?.id])
+
+  async function storeProfileFile(file) {
+    try {
+      setProfilePhotoBusy(true)
+      setProfilePhotoMessage('')
+
+      const dataUrl = await normaliseProfileImage(file)
+
+      await saveProfilePhoto(user?.id, dataUrl)
+
+      setProfilePhoto(dataUrl)
+      setProfilePhotoMessage('Profile photo updated.')
+    } catch (error) {
+      setProfilePhotoMessage(
+        error.message || 'Unable to save this profile photo.',
+      )
+    } finally {
+      setProfilePhotoBusy(false)
+    }
+  }
+
+  async function pasteProfilePhoto() {
+    if (!navigator.clipboard?.read) {
+      setProfilePhotoMessage(
+        'Click the profile-photo area and press Ctrl+V to paste an image.',
+      )
+      return
+    }
+
+    try {
+      const clipboardItems = await navigator.clipboard.read()
+
+      for (const item of clipboardItems) {
+        const imageType = item.types.find((type) =>
+          type.startsWith('image/'),
+        )
+
+        if (!imageType) continue
+
+        const blob = await item.getType(imageType)
+        const file = new File(
+          [blob],
+          'pasted-profile-photo',
+          { type: imageType },
+        )
+
+        await storeProfileFile(file)
+        return
+      }
+
+      setProfilePhotoMessage(
+        'No image was found in the clipboard.',
+      )
+    } catch {
+      setProfilePhotoMessage(
+        'Clipboard access was not available. Focus this card and press Ctrl+V.',
+      )
+    }
+  }
+
+  function handleProfilePaste(event) {
+    const items = [...(event.clipboardData?.items || [])]
+    const imageItem = items.find(
+      (item) =>
+        item.kind === 'file' &&
+        item.type.startsWith('image/'),
+    )
+
+    const file = imageItem?.getAsFile()
+
+    if (!file) {
+      setProfilePhotoMessage(
+        'Copy an image first, then press Ctrl+V here.',
+      )
+      return
+    }
+
+    event.preventDefault()
+    void storeProfileFile(file)
+  }
+
+  async function removeProfileImage() {
+    try {
+      setProfilePhotoBusy(true)
+      await deleteProfilePhoto(user?.id)
+      setProfilePhoto('')
+      setProfilePhotoMessage('Profile photo removed.')
+    } catch {
+      setProfilePhotoMessage(
+        'Unable to remove the profile photo.',
+      )
+    } finally {
+      setProfilePhotoBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    setProfileName(accountFullName)
+
+    if (!editingName) {
+      setNameDraft(accountFullName)
+    }
+  }, [accountFullName, editingName])
+
+  async function saveProfileName() {
+    const nextName = nameDraft.trim()
+
+    if (nextName.length < 2) {
+      setNameMessage('Enter a valid full name.')
+      return
+    }
+
+    try {
+      setNameSaving(true)
+      setNameMessage('')
+
+      const { data, error } =
+        await supabase.auth.updateUser({
+          data: {
+            ...(user?.user_metadata || {}),
+            full_name: nextName,
+          },
+        })
+
+      if (error) throw error
+
+      const savedName =
+        data?.user?.user_metadata?.full_name ||
+        nextName
+
+      setProfileName(savedName)
+      setNameDraft(savedName)
+      setEditingName(false)
+      setNameMessage('Name updated.')
+
+      window.dispatchEvent(
+        new CustomEvent(
+          'agriterrain-profile-name-changed',
+          {
+            detail: {
+              userId: String(user?.id || 'anonymous'),
+              fullName: savedName,
+            },
+          },
+        ),
+      )
+    } catch (error) {
+      setNameMessage(
+        error?.message ||
+        'Unable to update your name.',
+      )
+    } finally {
+      setNameSaving(false)
+    }
+  }
 
   const analysis = useMemo(
     () => readStoredData('agriterrain_latest_analysis') || fallbackAnalysis,
@@ -107,10 +382,6 @@ function Dashboard() {
             Search a location, draw a focused boundary, run the land-cover model,
             then keep the result in Reports / History for comparison and PDF reporting.
           </p>
-          <Link to="/satellite-analysis">
-            Start satellite analysis
-            <ArrowRight size={17} />
-          </Link>
         </div>
 
         <div className="dashboard-welcome-visual" aria-hidden="true">
@@ -162,26 +433,16 @@ function Dashboard() {
           <div><strong>Reports / History</strong><small>Review and export saved analyses</small></div>
           <ArrowRight size={17} />
         </Link>
-        <Link className="dashboard-quick-card" to="/reports">
-          <span><Map size={23} /></span>
-          <div><strong>Visited locations</strong><small>Return to previously analysed places</small></div>
-          <ArrowRight size={17} />
-        </Link>
         <button className="dashboard-quick-card" type="button" onClick={() => setAssistantOpen(true)}>
           <span><Bot size={23} /></span>
           <div><strong>AI guide</strong><small>Learn how to use the analysis</small></div>
           <ArrowRight size={17} />
         </button>
-        <Link className="dashboard-quick-card" to="/reports">
-          <span><History size={23} /></span>
-          <div><strong>Historical compare</strong><small>Compare saved results for the same place</small></div>
-          <ArrowRight size={17} />
-        </Link>
-        <a className="dashboard-quick-card" href="#recommendations">
+        <Link className="dashboard-quick-card" to="/recommendations">
           <span><Lightbulb size={23} /></span>
           <div><strong>Recommendations</strong><small>Review evidence-based guidance</small></div>
           <ArrowRight size={17} />
-        </a>
+        </Link>
       </section>
 
       <section className="dashboard-main-grid">
@@ -259,11 +520,164 @@ function Dashboard() {
 
         <article className="dashboard-panel dashboard-profile-panel">
           <div className="dashboard-panel-heading">
-            <div><span>Profile</span><h2>Account status</h2><p>Your authenticated workspace identity</p></div>
-            <UserRound size={22} />
+            <div><span>Account</span><h2>Profile</h2><p>Your authenticated workspace identity</p></div>
+            <span className="dashboard-profile-heading-icon" aria-hidden="true">
+              <UserRound size={20} />
+            </span>
           </div>
+          <div
+            className="dashboard-profile-photo-block"
+            tabIndex={0}
+            onPaste={handleProfilePaste}
+          >
+            <div className="dashboard-profile-photo-avatar" aria-hidden="true">
+              {profilePhoto ? (
+                <img src={profilePhoto} alt="" />
+              ) : (
+                <UserRound size={26} />
+              )}
+            </div>
+
+            <div className="dashboard-profile-photo-content">
+              <strong>Profile picture</strong>
+              <small>
+                Choose an image from your device or paste one with Ctrl+V.
+              </small>
+
+              <div className="dashboard-profile-photo-actions">
+                <label>
+                  <ImagePlus size={14} />
+                  {profilePhoto ? 'Change photo' : 'Choose photo'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={profilePhotoBusy}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0]
+                      if (file) void storeProfileFile(file)
+                      event.target.value = ''
+                    }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={pasteProfilePhoto}
+                  disabled={profilePhotoBusy}
+                >
+                  <Clipboard size={14} />
+                  Paste
+                </button>
+
+                {profilePhoto && (
+                  <button
+                    className="profile-photo-remove"
+                    type="button"
+                    onClick={removeProfileImage}
+                    disabled={profilePhotoBusy}
+                  >
+                    <Trash2 size={14} />
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {profilePhotoMessage && (
+            <p className="dashboard-profile-photo-message">
+              {profilePhotoMessage}
+            </p>
+          )}
+
           <dl className="dashboard-profile-list">
-            <div><dt>Full name</dt><dd>{fullName}</dd></div>
+            <div className="dashboard-profile-name-row">
+              <dt>Full name</dt>
+
+              <dd>
+                {editingName ? (
+                  <div className="dashboard-name-editor">
+                    <input
+                      type="text"
+                      value={nameDraft}
+                      maxLength={80}
+                      autoFocus
+                      disabled={nameSaving}
+                      onChange={(event) =>
+                        setNameDraft(event.target.value)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          void saveProfileName()
+                        }
+
+                        if (event.key === 'Escape') {
+                          setNameDraft(fullName)
+                          setEditingName(false)
+                          setNameMessage('')
+                        }
+                      }}
+                      aria-label="Full name"
+                    />
+
+                    <button
+                      className="dashboard-name-save"
+                      type="button"
+                      disabled={nameSaving}
+                      onClick={() => void saveProfileName()}
+                    >
+                      <Check size={14} />
+                      {nameSaving ? 'Saving...' : 'Save'}
+                    </button>
+
+                    <button
+                      className="dashboard-name-cancel"
+                      type="button"
+                      disabled={nameSaving}
+                      onClick={() => {
+                        setNameDraft(fullName)
+                        setEditingName(false)
+                        setNameMessage('')
+                      }}
+                    >
+                      <X size={14} />
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="dashboard-name-display">
+                    <span>{fullName}</span>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNameDraft(fullName)
+                        setNameMessage('')
+                        setEditingName(true)
+                      }}
+                      aria-label="Edit full name"
+                      title="Edit full name"
+                    >
+                      <Pencil size={14} />
+                      Edit
+                    </button>
+                  </div>
+                )}
+
+                {nameMessage && (
+                  <small
+                    className={
+                      nameMessage === 'Name updated.'
+                        ? 'dashboard-name-message success'
+                        : 'dashboard-name-message'
+                    }
+                  >
+                    {nameMessage}
+                  </small>
+                )}
+              </dd>
+            </div>
             <div><dt>Email</dt><dd>{user?.email}</dd></div>
             <div><dt>Email status</dt><dd className="profile-verified"><CheckCircle2 size={14} /> Verified</dd></div>
             <div><dt>Last sign in</dt><dd>{user?.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleDateString() : 'Current session'}</dd></div>
@@ -282,7 +696,7 @@ function Dashboard() {
             while hazard risk needs separate historical and environmental data.
           </p>
         </div>
-        <Link to={hasAnalysis ? '/reports' : '/satellite-analysis'}>{hasAnalysis ? 'Open history' : 'Start analysis'} <ArrowRight size={16} /></Link>
+        <Link to={hasAnalysis ? '/recommendations' : '/satellite-analysis'}>{hasAnalysis ? 'View recommendations' : 'Start analysis'} <ArrowRight size={16} /></Link>
       </section>
 
       {assistantOpen && (
@@ -290,9 +704,12 @@ function Dashboard() {
           <button className="assistant-backdrop" type="button" aria-label="Close AI guide" onClick={() => setAssistantOpen(false)} />
           <section>
             <header><span><Bot size={20} /></span><div><strong>AgriTerrain Guide</strong><small>Interface assistant</small></div><button type="button" aria-label="Close AI guide" onClick={() => setAssistantOpen(false)}><X size={19} /></button></header>
-            <div className="assistant-message"><MessageCircleQuestion size={18} /><p>Open Satellite Analysis, search a place, choose <strong>Draw boundary</strong>, mark at least three points, finish the boundary, then press <strong>Run real AI detection</strong>.</p></div>
-            <div className="assistant-message assistant-warning"><Leaf size={18} /><p>The dashboard displays saved model results only. Indices and risk indicators remain unavailable until the required data sources are connected.</p></div>
-            <Link to="/satellite-analysis" onClick={() => setAssistantOpen(false)}>Open Satellite Analysis <ArrowRight size={16} /></Link>
+            <div className="assistant-message"><MessageCircleQuestion size={18} /><p><strong>1. Run an analysis</strong><br />Open Satellite Analysis, search a location, draw a focused boundary, finish the boundary, choose a detection mode, and run the model.</p></div>
+            <div className="assistant-message"><Satellite size={18} /><p><strong>2. Understand the result</strong><br />Crop/field detections appear in green, waterbodies in blue, and buildings in orange. Review model certainty and imagery quality before relying on a result.</p></div>
+            <div className="assistant-message"><History size={18} /><p><strong>3. Review saved work</strong><br />Reports / History stores completed analyses. Saved Boundaries groups analysed areas, while Historical Compare helps review repeated analyses of the same location.</p></div>
+            <div className="assistant-message"><Lightbulb size={18} /><p><strong>4. Use recommendations carefully</strong><br />Recommendations are generated only from saved model output and available weather context. The system does not invent NDVI, flood risk, or drought risk.</p></div>
+            <div className="assistant-message assistant-warning"><Leaf size={18} /><p>AgriTerrain AI is an AI-assisted analysis tool. Important land or agricultural decisions should still be checked with local observations or trusted reference data.</p></div>
+            <Link to="/satellite-analysis" onClick={() => setAssistantOpen(false)}>Start Satellite Analysis <ArrowRight size={16} /></Link>
           </section>
         </div>
       )}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import L from 'leaflet'
 import {
   MapContainer,
@@ -38,6 +38,7 @@ import {
   MousePointer2,
   RefreshCw,
   Satellite,
+  Scan,
   Search,
   Sparkles,
   SquareDashedMousePointer,
@@ -65,6 +66,7 @@ import {
   saveAnalysisHistoryRecord,
 } from '../services/history'
 import { generateAnalysisPdf } from '../services/reportPdf'
+import { saveReportMedia } from '../services/reportMedia'
 import 'leaflet/dist/leaflet.css'
 import './SatelliteAnalysis.css'
 
@@ -114,9 +116,9 @@ const classDetails = {
 
 const locationIcon = L.divIcon({
   className: 'agriterrain-location-marker',
-  html: '<span></span>',
-  iconAnchor: [14, 28],
-  iconSize: [28, 28],
+  html: '<span>+</span>',
+  iconAnchor: [6, 6],
+  iconSize: [12, 12],
 })
 
 function MapSynchronizer({ center, zoom }) {
@@ -217,6 +219,8 @@ function serviceLabel(serviceStatus, preparingModel) {
 
 function SatelliteAnalysis() {
   const { user } = useAuth()
+  const routeLocation = useLocation()
+  const historicalNavigate = useNavigate()
   const [mapCenter, setMapCenter] = useState(INITIAL_CENTER)
   const [mapZoom, setMapZoom] = useState(17)
   const [mapStyle, setMapStyle] = useState('satellite')
@@ -224,6 +228,8 @@ function SatelliteAnalysis() {
   const [isMapFullscreen, setIsMapFullscreen] = useState(false)
   const [layersOpen, setLayersOpen] = useState(false)
   const mapCardRef = useRef(null)
+  const historicalReplayAppliedRef = useRef('')
+  const [historicalReplayLocked, setHistoricalReplayLocked] = useState(false)
   const [selectedLocation, setSelectedLocation] = useState({
     name: 'Rajshahi, Bangladesh',
     coordinates: INITIAL_CENTER,
@@ -323,6 +329,145 @@ function SatelliteAnalysis() {
       document.body.style.overflow = previousOverflow
     }
   }, [isMapFullscreen])
+
+  useEffect(() => {
+    const replay =
+      routeLocation.state?.historicalReplay
+
+    if (!replay) {
+      if (historicalReplayAppliedRef.current) {
+        historicalReplayAppliedRef.current = ''
+        setHistoricalReplayLocked(false)
+        setBoundary([])
+        setDrawing(false)
+        setMapLocked(false)
+        setAnalysis(null)
+        setCurrentHistoryRecord(null)
+        setAnalysisStatus('idle')
+        setAnalysisMessage(
+          'Search for a location, zoom in, then draw a compact analysis boundary.',
+        )
+      }
+
+      return
+    }
+
+    const replayBoundary =
+      Array.isArray(replay.boundary)
+        ? replay.boundary
+            .map((point) => {
+              if (
+                !Array.isArray(point) ||
+                point.length < 2
+              ) {
+                return null
+              }
+
+              const latitude = Number(point[0])
+              const longitude = Number(point[1])
+
+              if (
+                !Number.isFinite(latitude) ||
+                !Number.isFinite(longitude)
+              ) {
+                return null
+              }
+
+              return [latitude, longitude]
+            })
+            .filter(Boolean)
+        : []
+
+    if (replayBoundary.length < 3) {
+      setAnalysisMessage(
+        'The historical report does not contain a valid reusable boundary.',
+      )
+
+      return
+    }
+
+    const replayKey =
+      String(replay.sourceRecordId || '') ||
+      JSON.stringify(replayBoundary)
+
+    if (
+      historicalReplayAppliedRef.current ===
+      replayKey
+    ) {
+      return
+    }
+
+    historicalReplayAppliedRef.current =
+      replayKey
+
+    const providedLatitude =
+      Number(replay.coordinates?.[0])
+
+    const providedLongitude =
+      Number(replay.coordinates?.[1])
+
+    const fallbackLatitude =
+      replayBoundary.reduce(
+        (sum, point) => sum + point[0],
+        0,
+      ) / replayBoundary.length
+
+    const fallbackLongitude =
+      replayBoundary.reduce(
+        (sum, point) => sum + point[1],
+        0,
+      ) / replayBoundary.length
+
+    const coordinates =
+      Number.isFinite(providedLatitude) &&
+      Number.isFinite(providedLongitude)
+        ? [
+            providedLatitude,
+            providedLongitude,
+          ]
+        : [
+            fallbackLatitude,
+            fallbackLongitude,
+          ]
+
+    const locationName =
+      String(replay.location || '').trim() ||
+      'Historical analysis area'
+
+    setHistoricalReplayLocked(true)
+
+    setSelectedLocation({
+      name: locationName,
+      coordinates,
+    })
+
+    setMapCenter(coordinates)
+    setMapZoom(17)
+
+    setSearchQuery(
+      locationName.split(',')[0],
+    )
+
+    setSearchResults([])
+    setSearchError('')
+
+    setBoundary(replayBoundary)
+
+    setDrawing(false)
+
+    // The POLYGON is locked.
+    // The map itself remains movable/zoomable.
+    setMapLocked(false)
+
+    setAnalysis(null)
+    setCurrentHistoryRecord(null)
+    setAnalysisStatus('idle')
+    setActiveResultTab('overview')
+
+    setAnalysisMessage(
+      'Historical boundary loaded. Its exact shape and size are locked. Choose Faster, Balanced, or Standard, then run detection normally.',
+    )
+  }, [routeLocation.state])
 
   const boundaryMetrics = useMemo(
     () => calculateBoundaryMetrics(boundary),
@@ -441,6 +586,13 @@ function SatelliteAnalysis() {
   }, [selectedLocation])
 
   async function handleSearch(event) {
+    if (historicalReplayLocked) {
+      setAnalysisMessage(
+        'This historical boundary is locked. Return to Reports if you want to choose a different area.',
+      )
+      return
+    }
+
     event.preventDefault()
     const query = searchQuery.trim()
 
@@ -491,6 +643,13 @@ function SatelliteAnalysis() {
   }
 
   function chooseLocation(result) {
+    if (historicalReplayLocked) {
+      setAnalysisMessage(
+        'This historical boundary is locked. Return to Reports if you want to choose a different area.',
+      )
+      return
+    }
+
     const coordinates = [Number(result.lat), Number(result.lon)]
     setWeatherLoading(true)
     setSelectedLocation({ name: result.display_name, coordinates })
@@ -502,6 +661,13 @@ function SatelliteAnalysis() {
   }
 
   function locateUser() {
+    if (historicalReplayLocked) {
+      setAnalysisMessage(
+        'This historical boundary is locked. Return to Reports if you want to choose a different area.',
+      )
+      return
+    }
+
     if (!navigator.geolocation) {
       setAnalysisMessage('Location access is not supported by this browser.')
       return
@@ -522,6 +688,13 @@ function SatelliteAnalysis() {
   }
 
   function startDrawing() {
+    if (historicalReplayLocked) {
+      setAnalysisMessage(
+        'This historical boundary is locked. Return to Reports if you want to choose a different area.',
+      )
+      return
+    }
+
     setBoundary([])
     setDrawing(true)
     setMapLocked(false)
@@ -533,6 +706,13 @@ function SatelliteAnalysis() {
   }
 
   function addBoundaryPoint(point) {
+    if (historicalReplayLocked) {
+      setAnalysisMessage(
+        'This historical boundary is locked. Return to Reports if you want to choose a different area.',
+      )
+      return
+    }
+
     if (boundary.length >= 80) {
       setAnalysisMessage('The boundary already has the maximum of 80 points.')
       return
@@ -541,6 +721,13 @@ function SatelliteAnalysis() {
   }
 
   function finishDrawing() {
+    if (historicalReplayLocked) {
+      setAnalysisMessage(
+        'This historical boundary is locked. Return to Reports if you want to choose a different area.',
+      )
+      return
+    }
+
     if (boundary.length < 3) {
       setAnalysisMessage('Add at least three map points before finishing.')
       return
@@ -559,12 +746,26 @@ function SatelliteAnalysis() {
   }
 
   function undoBoundaryPoint() {
+    if (historicalReplayLocked) {
+      setAnalysisMessage(
+        'This historical boundary is locked. Return to Reports if you want to choose a different area.',
+      )
+      return
+    }
+
     setBoundary((current) => current.slice(0, -1))
     setAnalysis(null)
     setAnalysisStatus('idle')
   }
 
   function clearBoundary() {
+    if (historicalReplayLocked) {
+      setAnalysisMessage(
+        'This historical boundary is locked. Return to Reports if you want to choose a different area.',
+      )
+      return
+    }
+
     resetAnalysis('Boundary cleared. Select Draw boundary to start again.')
   }
 
@@ -709,6 +910,23 @@ function SatelliteAnalysis() {
         )
         if (record) {
           setHistory(saveAnalysisHistoryRecord(user?.id, record))
+
+          // Report media is stored only AFTER the detection timer has
+          // stopped and the result has completed. Nothing here is awaited.
+          if (result.overlayImage) {
+            setTimeout(() => {
+              void saveReportMedia(
+                user?.id,
+                record.id,
+                result.overlayImage,
+              ).catch((error) => {
+                console.warn(
+                  'Unable to save optional report comparison media.',
+                  error,
+                )
+              })
+            }, 0)
+          }
         }
         setAnalysisMessage(
           'Real model inference completed and saved to Reports / History. Review imagery quality and uncertainty before using the result.',
@@ -768,7 +986,19 @@ function SatelliteAnalysis() {
         <i />
         <div className={boundary.length >= 3 ? 'process-step process-step-active' : 'process-step'}>
           <span>2</span>
-          <p><strong>Draw a small area</strong><small>Maximum {MAX_ANALYSIS_SIDE_METRES} m per side</small></p>
+          <p>
+            <strong>
+              {historicalReplayLocked
+                ? 'Reuse exact boundary'
+                : 'Draw a small area'}
+            </strong>
+
+            <small>
+              {historicalReplayLocked
+                ? 'Saved polygon shape and size locked'
+                : `Maximum ${MAX_ANALYSIS_SIDE_METRES} m per side`}
+            </small>
+          </p>
         </div>
         <i />
         <div className={analysisStatus === 'complete' ? 'process-step process-step-active' : 'process-step'}>
@@ -778,12 +1008,39 @@ function SatelliteAnalysis() {
       </section>
 
       <section className="satellite-workspace-grid">
-        <aside className="satellite-control-column no-print">
-          <article className="satellite-panel">
+        <aside
+          className={
+            historicalReplayLocked
+              ? 'satellite-control-column no-print historical-replay-controls'
+              : 'satellite-control-column no-print'
+          }
+        >
+          {historicalReplayLocked && (
+            <button
+              className="historical-replay-return"
+              type="button"
+              onClick={() =>
+                historicalNavigate(
+                  routeLocation.state?.historicalReplay?.returnPath ||
+                  '/reports',
+                )
+              }
+            >
+              ← Return to Historical Analysis
+            </button>
+          )}
+          <article className="satellite-panel historical-location-panel">
             <div className="satellite-panel-heading">
               <span><Search size={18} /></span>
               <div><strong>1. Find location</strong><small>Bangladesh place search</small></div>
             </div>
+
+            {historicalReplayLocked && (
+              <div className="historical-replay-location-copy">
+                <strong>{selectedLocation.name}</strong>
+                <small>Historical location locked</small>
+              </div>
+            )}
 
             <form className="satellite-search-form" onSubmit={handleSearch}>
               <div>
@@ -793,6 +1050,7 @@ function SatelliteAnalysis() {
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder="District, upazila, village..."
                   aria-label="Search Bangladesh location"
+                  disabled={historicalReplayLocked}
                 />
                 {searchQuery && (
                   <button
@@ -807,7 +1065,7 @@ function SatelliteAnalysis() {
                   </button>
                 )}
               </div>
-              <button type="submit" disabled={searching} aria-label="Search location">
+              <button type="submit" disabled={searching || historicalReplayLocked} aria-label="Search location">
                 {searching ? <LoaderCircle className="satellite-spinner" size={18} /> : <Search size={18} />}
               </button>
             </form>
@@ -835,69 +1093,57 @@ function SatelliteAnalysis() {
             </div>
           </article>
 
-          <article className="satellite-panel model-readiness-panel">
-            <div className="satellite-panel-heading">
-              <span><BrainCircuit size={18} /></span>
-              <div><strong>2. Prepare real AI</strong><small>No demonstration fallback</small></div>
-            </div>
 
-            <div className={`model-readiness-state readiness-${serviceStatus.status}`}>
-              <span>{serviceStatus.modelReady ? <Check size={18} /> : <BrainCircuit size={18} />}</span>
-              <div>
-                <strong>{serviceLabel(serviceStatus, preparingModel)}</strong>
-                <small>
-                  {!serviceStatus.online
-                    ? 'Start the included Python service.'
-                    : serviceStatus.modelReady
-                      ? 'OpenEarthMap weights are available.'
-                      : `One-time download: about ${serviceStatus.downloadMb} MB.`}
-                </small>
-              </div>
-            </div>
-
-            {!serviceStatus.online && (
-              <p className="service-start-note">
-                Open <code>ml-service\start-service.bat</code>, keep it running, then check again.
-              </p>
-            )}
-
-            <div className="model-action-row">
-              <button type="button" onClick={refreshServiceStatus} disabled={preparingModel}>
-                <RefreshCw size={15} /> Check service
-              </button>
-              {serviceStatus.online && !serviceStatus.modelReady && (
-                <button
-                  className="prepare-model-button"
-                  type="button"
-                  onClick={handlePrepareModel}
-                  disabled={preparingModel}
-                >
-                  {preparingModel ? <LoaderCircle className="satellite-spinner" size={15} /> : <Download size={15} />}
-                  {preparingModel ? 'Preparing...' : 'Prepare model'}
-                </button>
-              )}
-            </div>
-          </article>
 
           <article className="satellite-panel boundary-panel">
             <div className="satellite-panel-heading">
               <span><SquareDashedMousePointer size={18} /></span>
-              <div><strong>3. Select analysis area</strong><small>Small areas preserve object detail</small></div>
+              <div><strong>2. Select analysis area</strong><small>Small areas preserve object detail</small></div>
             </div>
 
-            <button className="draw-boundary-button" type="button" onClick={startDrawing}>
+            {historicalReplayLocked && (
+              <div className="historical-replay-boundary-copy">
+                <strong>Historical boundary locked</strong>
+                <small>Exact saved shape and size are preserved.</small>
+              </div>
+            )}
+
+            {historicalReplayLocked && (
+              <div className="historical-replay-lock">
+                <History size={17} />
+
+                <div>
+                  <strong>Historical boundary locked</strong>
+                  <small>
+                    Shape and size are preserved exactly from the saved report.
+                    You may pan or zoom the map and choose any detection mode.
+                  </small>
+                </div>
+              </div>
+            )}
+
+            <button
+              className="draw-boundary-button"
+              type="button"
+              onClick={startDrawing}
+              disabled={historicalReplayLocked}
+            >
               <MousePointer2 size={17} />
-              {drawing ? 'Drawing—click on map' : 'Draw new boundary'}
+              {historicalReplayLocked
+                ? 'Historical boundary locked'
+                : drawing
+                  ? 'Drawing—click on map'
+                  : 'Draw new boundary'}
             </button>
 
             <div className="boundary-action-row">
-              <button type="button" onClick={undoBoundaryPoint} disabled={!boundary.length}>
+              <button type="button" onClick={undoBoundaryPoint} disabled={!boundary.length || historicalReplayLocked}>
                 <Undo2 size={15} /> Undo
               </button>
-              <button type="button" onClick={finishDrawing} disabled={boundary.length < 3 || !drawing}>
+              <button type="button" onClick={finishDrawing} disabled={boundary.length < 3 || !drawing || historicalReplayLocked}>
                 <Check size={15} /> Finish
               </button>
-              <button type="button" onClick={clearBoundary} disabled={!boundary.length}>
+              <button type="button" onClick={clearBoundary} disabled={!boundary.length || historicalReplayLocked}>
                 <X size={15} /> Clear
               </button>
             </div>
@@ -923,7 +1169,7 @@ function SatelliteAnalysis() {
           <article className="satellite-panel analysis-mode-panel">
             <div className="analysis-mode-heading">
               <div>
-                <strong>4. Analysis mode</strong>
+                <strong>3. Analysis mode</strong>
                 <small>Choose the mode that fits your priority.</small>
               </div>
             </div>
@@ -1011,6 +1257,62 @@ function SatelliteAnalysis() {
                   <button className={!mapLocked ? 'active' : ''} type="button" onClick={() => setMapLocked(false)}>Live Map</button>
                   <button className={mapLocked ? 'active' : ''} type="button" onClick={() => setMapLocked(true)} disabled={boundary.length < 3}>Locked Map</button>
                 </div>
+
+                <div className="map-source-switch map-ai-service-switch">
+                  <button
+                    className={
+                      serviceStatus.modelReady
+                        ? 'map-ai-service-ready'
+                        : 'map-ai-service-retry'
+                    }
+                    type="button"
+                    onClick={() => {
+                      if (
+                        serviceStatus.online &&
+                        !serviceStatus.modelReady
+                      ) {
+                        void handlePrepareModel()
+                        return
+                      }
+
+                      void refreshServiceStatus()
+                    }}
+                    disabled={
+                      preparingModel ||
+                      serviceStatus.status === 'checking'
+                    }
+                    title={
+                      serviceStatus.modelReady
+                        ? 'Real AI ready · click to check service'
+                        : serviceStatus.online
+                          ? 'Prepare the real AI model'
+                          : 'Check the AI service'
+                    }
+                  >
+                    {preparingModel ||
+                    serviceStatus.status === 'checking' ? (
+                      <LoaderCircle
+                        className="satellite-spinner"
+                        size={15}
+                      />
+                    ) : serviceStatus.modelReady ? (
+                      <Check size={15} />
+                    ) : (
+                      <RefreshCw size={15} />
+                    )}
+
+                    <span>
+                      {preparingModel
+                        ? 'Preparing AI'
+                        : serviceStatus.modelReady
+                          ? 'Real AI ready'
+                          : serviceStatus.online
+                            ? 'Prepare AI'
+                            : 'Check AI'}
+                    </span>
+                  </button>
+                </div>
+
               </div>
             </header>
 
@@ -1045,7 +1347,7 @@ function SatelliteAnalysis() {
                 )}
 
                 <Marker position={selectedLocation.coordinates} icon={locationIcon}>
-                  <Tooltip direction="top" offset={[0, -26]}>{selectedLocation.name}</Tooltip>
+                  <Tooltip direction="top" offset={[0, -14]}>{selectedLocation.name}</Tooltip>
                 </Marker>
 
                 {boundary.length >= 2 && (
@@ -1053,7 +1355,11 @@ function SatelliteAnalysis() {
                     positions={boundary}
                     pathOptions={{ color: '#9aec6a', weight: 3, fillColor: '#9aec6a', fillOpacity: 0.08 }}
                   >
-                    <Tooltip sticky>Selected analysis boundary</Tooltip>
+                    <Tooltip sticky>
+                      {historicalReplayLocked
+                        ? 'Locked historical analysis boundary'
+                        : 'Selected analysis boundary'}
+                    </Tooltip>
                   </Polygon>
                 )}
 
@@ -1085,6 +1391,7 @@ function SatelliteAnalysis() {
                   <button
                     type="button"
                     onClick={startDrawing}
+                    disabled={historicalReplayLocked}
                     title="Draw new boundary"
                     aria-label="Draw new boundary"
                   >
@@ -1094,7 +1401,7 @@ function SatelliteAnalysis() {
                   <button
                     type="button"
                     onClick={undoBoundaryPoint}
-                    disabled={!boundary.length}
+                    disabled={!boundary.length || historicalReplayLocked}
                     title="Undo last point"
                     aria-label="Undo last point"
                   >
@@ -1104,7 +1411,7 @@ function SatelliteAnalysis() {
                   <button
                     type="button"
                     onClick={finishDrawing}
-                    disabled={boundary.length < 3 || !drawing}
+                    disabled={boundary.length < 3 || !drawing || historicalReplayLocked}
                     title="Finish boundary"
                     aria-label="Finish boundary"
                   >
@@ -1114,7 +1421,7 @@ function SatelliteAnalysis() {
                   <button
                     type="button"
                     onClick={clearBoundary}
-                    disabled={!boundary.length}
+                    disabled={!boundary.length || historicalReplayLocked}
                     title="Clear boundary"
                     aria-label="Clear boundary"
                   >
@@ -1234,7 +1541,7 @@ function SatelliteAnalysis() {
             >
               {analysisStatus === 'running'
                 ? <LoaderCircle className="satellite-spinner" size={20} />
-                : <BrainCircuit size={20} />}
+                : <Scan size={20} />}
               {analysisStatus === 'running'
                 ? 'Running real AI...'
                 : 'Run real AI detection'}
@@ -1462,7 +1769,7 @@ function SatelliteAnalysis() {
                 )}
 
                 <div className="result-download-row no-print">
-                  <button type="button" onClick={() => generateAnalysisPdf(activeHistoryRecord, user?.email || '')}>
+                  <button type="button" onClick={() => generateAnalysisPdf(activeHistoryRecord, user?.email || '', user?.id || '')}>
                     <FileDown size={16} /> Generate PDF report
                   </button>
                   {analysis.overlayImage && (
@@ -1475,13 +1782,7 @@ function SatelliteAnalysis() {
             )}
           </article>
 
-          <article className="satellite-panel field-recommendation-card">
-            <Focus size={21} />
-            <div>
-              <strong>Accuracy-first selection</strong>
-              <p>For individual houses and small ponds, keep estimated detail near 0.8 m/pixel or better. The backend also uses stricter water and building precision filters to reduce false positives.</p>
-            </div>
-          </article>
+
         </aside>
       </section>
 

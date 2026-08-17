@@ -11,6 +11,8 @@ import ForgotPassword from './pages/ForgotPassword.jsx'
 import Login from './pages/Login.jsx'
 import ResetPassword from './pages/ResetPassword.jsx'
 import Reports from './pages/Reports.jsx'
+import HistoricalAnalysis from './pages/HistoricalAnalysis.jsx'
+import Recommendations from './pages/Recommendations.jsx'
 import SatelliteAnalysis from './pages/SatelliteAnalysis.jsx'
 import Signup from './pages/Signup.jsx'
 import VerifyEmail from './pages/VerifyEmail.jsx'
@@ -65,6 +67,22 @@ createRoot(document.getElementById('root')).render(
             element={
               <ProtectedRoute>
                 <Reports />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/reports/history/:recordId"
+            element={
+              <ProtectedRoute>
+                <HistoricalAnalysis />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/recommendations"
+            element={
+              <ProtectedRoute>
+                <Recommendations />
               </ProtectedRoute>
             }
           />

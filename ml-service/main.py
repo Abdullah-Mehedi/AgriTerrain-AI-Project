@@ -199,6 +199,10 @@ class AnalyzeRequest(BaseModel):
     analysis_mode: Literal["standard", "balanced", "faster"] = "standard"
 
 
+class ReportBackgroundRequest(BaseModel):
+    boundary: list[list[float]]
+
+
 def model_files_ready() -> bool:
     return all(
         (MODEL_DIRECTORY / relative_path).is_file()
@@ -2123,6 +2127,37 @@ def prepare_model() -> dict[str, Any]:
         "model_status": "loaded",
         "model_ready": True,
         "model": "OpenEarthMap U-Net EfficientNet-B4",
+    }
+
+
+@app.post("/report-background")
+def report_background(
+    request: ReportBackgroundRequest,
+) -> dict[str, Any]:
+    boundary = validate_boundary(request.boundary)
+    box = boundary_box(boundary)
+
+    # Keep the same selection-size validation used by analysis.
+    validate_image_scale(box)
+
+    image = fetch_satellite_image(box).convert("RGB")
+
+    output = io.BytesIO()
+    image.save(
+        output,
+        format="JPEG",
+        quality=90,
+        optimize=True,
+    )
+
+    encoded = base64.b64encode(
+        output.getvalue()
+    ).decode("ascii")
+
+    return {
+        "image": f"data:image/jpeg;base64,{encoded}",
+        "width": image.width,
+        "height": image.height,
     }
 
 

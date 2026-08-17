@@ -1,0 +1,236 @@
+.comparison-preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.comparison-preview-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(6,28,16,.62);
+}
+
+.comparison-preview-modal > section {
+  position: relative;
+  width: min(1180px, 100%);
+  max-height: 92vh;
+  overflow: auto;
+  background: white;
+  border-radius: 18px;
+  box-shadow: 0 28px 80px rgba(0,0,0,.28);
+}
+
+.comparison-preview-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 18px 20px;
+  background: white;
+  border-bottom: 1px solid #e3ece6;
+}
+
+.comparison-preview-header span {
+  color: #16864f;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.comparison-preview-header h2 {
+  margin: 3px 0;
+  color: #173a24;
+  font-size: 19px;
+}
+
+.comparison-preview-header p {
+  margin: 0;
+  color: #718078;
+  font-size: 11px;
+}
+
+.comparison-preview-header > button {
+  width: 35px;
+  height: 35px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: #f0f5f1;
+  cursor: pointer;
+}
+
+.comparison-preview-body {
+  padding: 18px 20px;
+}
+
+.comparison-preview-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 12px;
+  color: #685627;
+  background: #fff8e9;
+  border: 1px solid #efdfb8;
+  border-radius: 10px;
+}
+
+.comparison-preview-note p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.comparison-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 13px;
+}
+
+.comparison-preview-grid > article {
+  overflow: hidden;
+  background: white;
+  border: 1px solid #dfe9e2;
+  border-radius: 13px;
+}
+
+.comparison-preview-grid article > header {
+  display: flex;
+  gap: 9px;
+  padding: 12px;
+  background: #f7faf8;
+  border-bottom: 1px solid #e5ede7;
+}
+
+.comparison-preview-grid article > header > span {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: white;
+  background: #16864f;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.comparison-preview-grid article header strong,
+.comparison-preview-grid article header small {
+  display: block;
+}
+
+.comparison-preview-grid article header strong {
+  color: #183b26;
+  font-size: 12px;
+}
+
+.comparison-preview-grid article header small {
+  margin-top: 2px;
+  color: #75837a;
+  font-size: 9px;
+}
+
+.comparison-preview-grid dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.comparison-preview-grid dl > div {
+  padding: 7px 0;
+  border-bottom: 1px solid #edf1ee;
+}
+
+.comparison-preview-grid dt {
+  color: #76847b;
+  font-size: 8px;
+}
+
+.comparison-preview-grid dd {
+  margin: 2px 0 0;
+  color: #203d2b;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.comparison-preview-image {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  margin: 4px 12px 12px;
+  overflow: hidden;
+  color: #78867d;
+  background: #eef3ef;
+  border-radius: 9px;
+  font-size: 10px;
+  text-align: center;
+}
+
+.comparison-preview-image img {
+  width: 100%;
+  height: 280px;
+  display: block;
+  object-fit: contain;
+}
+
+.comparison-preview-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 13px 20px;
+  background: white;
+  border-top: 1px solid #e4ece6;
+}
+
+.comparison-preview-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 13px;
+  color: white;
+  background: #16864f;
+  border: 0;
+  border-radius: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (min-width: 901px) {
+  .comparison-preview-modal {
+    left: 264px;
+  }
+}
+
+@media (max-width: 760px) {
+  .comparison-preview-modal {
+    padding: 7px;
+  }
+
+  .comparison-preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+
+/* === AGRITERRAIN COMPARISON FULL IMAGE START === */
+
+.comparison-preview-image img {
+  object-fit: contain !important;
+  background: #edf2ee;
+}
+
+/* === AGRITERRAIN COMPARISON FULL IMAGE END === */
+

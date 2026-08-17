@@ -1438,3 +1438,427 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* === AGRITERRAIN HISTORICAL REPLAY START === */
+.historical-replay-lock {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 10px;
+  padding: 10px 11px;
+  color: #17683f;
+  background: #edf8ef;
+  border: 1px solid #cce6d2;
+  border-radius: 10px;
+}
+
+.historical-replay-lock > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.historical-replay-lock strong,
+.historical-replay-lock small {
+  display: block;
+}
+
+.historical-replay-lock strong {
+  font-size: 10px;
+}
+
+.historical-replay-lock small {
+  margin-top: 2px;
+  color: #65776b;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.draw-boundary-button:disabled {
+  cursor: not-allowed;
+  opacity: .58;
+}
+
+.satellite-search-form input:disabled {
+  color: #66756c;
+  background: #f1f5f2;
+  cursor: not-allowed;
+}
+
+.map-fullscreen-draw-tools button:disabled {
+  cursor: not-allowed;
+  opacity: .42;
+}
+/* === AGRITERRAIN HISTORICAL REPLAY END === */
+
+/* === AGRITERRAIN COMPACT SATELLITE LAYOUT START === */
+/*
+  Keep the original Satellite Analysis design.
+  Only redistribute the remaining three left cards and
+  allow the map/right column to use the available height.
+*/
+
+@media (min-width: 821px) {
+  .satellite-workspace-grid {
+    align-items: stretch;
+  }
+
+  /*
+    Remaining left controls:
+    1. Find location
+    2. Select analysis area
+    3. Analysis mode
+  */
+  .satellite-control-column {
+    align-self: stretch;
+    align-content: start;
+  }
+
+  /*
+    Let the map occupy any remaining grid-row height instead
+    of leaving a large blank area below the map controls.
+  */
+  .satellite-map-column {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .satellite-map-card {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .satellite-map-wrap {
+    flex: 1 1 auto;
+  }
+
+  .analysis-action-row {
+    flex: 0 0 auto;
+  }
+}
+
+
+/* ----------------------------------------------------------
+   REAL AI STATUS — same visual family/height as map switches
+   ---------------------------------------------------------- */
+
+.map-ai-service-switch {
+  flex: 0 0 auto;
+}
+
+.map-ai-service-switch button {
+  min-height: 31px;
+  white-space: nowrap;
+}
+
+.map-ai-service-switch button > span {
+  display: inline;
+}
+
+.map-ai-service-switch button.map-ai-service-ready {
+  color: #176c43;
+}
+
+.satellite-map-toolbar-actions {
+  flex-wrap: wrap;
+}
+
+
+/* ----------------------------------------------------------
+   RESULTS — Accuracy card removed, use complete width
+   ---------------------------------------------------------- */
+
+.satellite-results-column {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.satellite-results-panel {
+  width: 100%;
+  grid-column: 1 / -1;
+}
+
+
+/* Smaller screens keep controls readable. */
+@media (max-width: 1050px) {
+  .map-ai-service-switch button {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
+
+@media (max-width: 820px) {
+  .map-ai-service-switch {
+    width: 100%;
+  }
+
+  .map-ai-service-switch button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+/* === AGRITERRAIN COMPACT SATELLITE LAYOUT END === */
+
+/* === AGRITERRAIN SATELLITE UI POLISH V2 START === */
+/* ----------------------------------------------------------
+   DUPLICATE TOP AI BADGE
+   Keep map-toolbar status only. Verified account remains.
+   ---------------------------------------------------------- */
+
+.satellite-service-badge {
+  display: none !important;
+}
+
+
+/* ----------------------------------------------------------
+   MAP TOOLBAR AI STATUS
+   ---------------------------------------------------------- */
+
+.map-ai-service-switch button.map-ai-service-ready {
+  color: #176c43 !important;
+  background: #e8f7ed !important;
+  border: 1px solid #b9dfc5 !important;
+  box-shadow: none !important;
+}
+
+.map-ai-service-switch button.map-ai-service-ready:hover {
+  background: #dcf2e4 !important;
+}
+
+.map-ai-service-switch button.map-ai-service-retry {
+  color: #ad3e3e !important;
+  background: #fff0f0 !important;
+  border: 1px solid #efc6c6 !important;
+  box-shadow: none !important;
+}
+
+.map-ai-service-switch button.map-ai-service-retry:hover {
+  background: #ffe5e5 !important;
+}
+
+.map-ai-service-switch button.map-ai-service-retry svg {
+  color: #c24444;
+}
+
+
+/* ----------------------------------------------------------
+   SMALL WHITE-PLUS LOCATION MARKER
+   ---------------------------------------------------------- */
+
+.agriterrain-location-marker {
+  width: 20px !important;
+  height: 20px !important;
+  background: transparent !important;
+  border: 0 !important;
+}
+
+.agriterrain-location-marker span {
+  width: 18px !important;
+  height: 18px !important;
+  display: grid !important;
+  place-items: center !important;
+
+  color: #fff !important;
+  background: #16864f !important;
+
+  border: 2px solid #fff !important;
+  border-radius: 50% !important;
+
+  box-shadow:
+    0 3px 9px rgba(3, 43, 27, .28) !important;
+
+  transform: none !important;
+
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+}
+
+.agriterrain-location-marker span::after {
+  display: none !important;
+}
+
+
+/* ----------------------------------------------------------
+   RUN DETECTION — DETECTION-LAYER GREEN
+   ---------------------------------------------------------- */
+
+.run-analysis-button:not(:disabled) {
+  color: #fff !important;
+  background: #16864f !important;
+  border-color: #16864f !important;
+  box-shadow:
+    0 8px 20px rgba(22, 134, 79, .15) !important;
+}
+
+.run-analysis-button:not(:disabled):hover {
+  background: #116f42 !important;
+  border-color: #116f42 !important;
+}
+
+.run-analysis-button:not(:disabled) svg {
+  color: #fff !important;
+}
+/* === AGRITERRAIN SATELLITE UI POLISH V2 END === */
+
+/* === AGRITERRAIN FINAL SATELLITE ACTION POLISH START === */
+/* Duplicate header AI badge removed visually.
+   Map-toolbar Real AI status remains functional. */
+.satellite-service-badge {
+  display: none !important;
+}
+
+/* ----------------------------------------------------------
+   REAL AI STATUS
+   ---------------------------------------------------------- */
+
+.map-ai-service-switch button.map-ai-service-ready {
+  color: #116c3d !important;
+  background: #e6f7eb !important;
+  border: 1px solid #b9dfc5 !important;
+  box-shadow: none !important;
+}
+
+.map-ai-service-switch button.map-ai-service-retry {
+  color: #b23e3e !important;
+  background: #fff0f0 !important;
+  border: 1px solid #efc5c5 !important;
+  box-shadow: none !important;
+}
+
+.map-ai-service-switch button.map-ai-service-retry svg {
+  color: #c34141 !important;
+}
+
+/* ----------------------------------------------------------
+   LOCATION MARKER
+   PLAIN WHITE PLUS ONLY:
+   no circle, background, border or shadow.
+   ---------------------------------------------------------- */
+
+.agriterrain-location-marker,
+.agriterrain-location-marker div {
+  width: 12px !important;
+  height: 12px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.agriterrain-location-marker span {
+  width: 12px !important;
+  height: 12px !important;
+
+  display: grid !important;
+  place-items: center !important;
+
+  padding: 0 !important;
+  margin: 0 !important;
+
+  color: #ffffff !important;
+  background: transparent !important;
+
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+
+  transform: none !important;
+
+  font-family: Arial, Helvetica, sans-serif !important;
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  line-height: 12px !important;
+}
+
+.agriterrain-location-marker span::before,
+.agriterrain-location-marker span::after {
+  display: none !important;
+}
+
+/* ----------------------------------------------------------
+   RUN DETECTION
+   EXACT MAIN ACTION GREEN USED THROUGHOUT THE UI
+   ---------------------------------------------------------- */
+
+.run-analysis-button:not(:disabled) {
+  color: #ffffff !important;
+  background: #16864f !important;
+  border-color: #16864f !important;
+  box-shadow: none !important;
+}
+
+.run-analysis-button:not(:disabled):hover {
+  color: #ffffff !important;
+  background: #16864f !important;
+  border-color: #16864f !important;
+}
+
+.run-analysis-button:not(:disabled) svg {
+  color: #ffffff !important;
+}
+/* === AGRITERRAIN FINAL SATELLITE ACTION POLISH END === */
+
+/* === AGRITERRAIN COMPACT HISTORICAL REPLAY V2 START === */
+/* ==========================================================
+   HISTORICAL REPLAY — COMPACT LEFT CONTROLS
+   ========================================================== */
+
+.historical-replay-return {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 11px;
+  color: #17683f;
+  background: #edf8f0;
+  border: 1px solid #cfe6d5;
+  border-radius: 10px;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Keep only title + locked copy in the first two cards. */
+.historical-replay-controls
+.historical-location-panel
+> *:not(.satellite-panel-heading):not(.historical-replay-location-copy) {
+  display: none !important;
+}
+
+.historical-replay-controls
+.boundary-panel
+> *:not(.satellite-panel-heading):not(.historical-replay-boundary-copy) {
+  display: none !important;
+}
+
+.historical-replay-location-copy,
+.historical-replay-boundary-copy {
+  display: grid;
+  gap: 2px;
+  margin-top: 10px;
+  padding: 10px 11px;
+  color: #17683f;
+  background: #edf8f0;
+  border: 1px solid #d2e8d7;
+  border-radius: 9px;
+}
+
+.historical-replay-location-copy strong,
+.historical-replay-boundary-copy strong {
+  font-size: 10px;
+}
+
+.historical-replay-location-copy small,
+.historical-replay-boundary-copy small {
+  color: #65766b;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.historical-replay-controls
+.historical-location-panel,
+.historical-replay-controls
+.boundary-panel {
+  padding-bottom: 14px;
+}
+/* === AGRITERRAIN COMPACT HISTORICAL REPLAY V2 END === */

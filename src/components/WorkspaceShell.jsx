@@ -1,20 +1,22 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import {
   Bell,
   FileText,
   Home,
   LayoutDashboard,
-  Leaf,
   LogOut,
   Menu,
   Satellite,
   ShieldCheck,
-  Sparkles,
   UserRound,
   X,
 } from 'lucide-react'
 import { useAuth } from '../context/auth-context'
+import {
+  getProfilePhoto,
+  PROFILE_PHOTO_EVENT,
+} from '../services/profilePhoto'
 import './WorkspaceShell.css'
 
 function getInitials(name) {
@@ -32,9 +34,76 @@ function WorkspaceShell({ children, title, description, headerActions }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
   const [logoutError, setLogoutError] = useState('')
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [profilePhoto, setProfilePhoto] = useState('')
+  const [profileNameOverride, setProfileNameOverride] = useState('')
 
   const fullName =
-    user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User'
+    profileNameOverride ||
+    user?.user_metadata?.full_name ||
+    user?.email?.split('@')[0] ||
+    'User'
+
+
+  useEffect(() => {
+    const targetUserId =
+      String(user?.id || 'anonymous')
+
+    function handleProfileNameChange(event) {
+      if (
+        String(event.detail?.userId || '') !==
+        targetUserId
+      ) {
+        return
+      }
+
+      setProfileNameOverride(
+        event.detail?.fullName || '',
+      )
+    }
+
+    window.addEventListener(
+      'agriterrain-profile-name-changed',
+      handleProfileNameChange,
+    )
+
+    return () => {
+      window.removeEventListener(
+        'agriterrain-profile-name-changed',
+        handleProfileNameChange,
+      )
+    }
+  }, [user?.id])
+
+
+  useEffect(() => {
+    let active = true
+    const key = String(user?.id || 'anonymous')
+
+    setProfilePhoto('')
+
+    getProfilePhoto(user?.id).then((photo) => {
+      if (active) setProfilePhoto(photo)
+    })
+
+    function handleProfilePhotoChange(event) {
+      if (String(event.detail?.userId || '') !== key) return
+      setProfilePhoto(event.detail?.dataUrl || '')
+    }
+
+    window.addEventListener(
+      PROFILE_PHOTO_EVENT,
+      handleProfilePhotoChange,
+    )
+
+    return () => {
+      active = false
+      window.removeEventListener(
+        PROFILE_PHOTO_EVENT,
+        handleProfilePhotoChange,
+      )
+    }
+  }, [user?.id])
 
   async function handleLogout() {
     try {
@@ -65,7 +134,7 @@ function WorkspaceShell({ children, title, description, headerActions }) {
         <div className="workspace-sidebar-heading">
           <Link className="workspace-brand" to="/" onClick={closeSidebar}>
             <span className="workspace-brand-icon">
-              <Leaf size={23} />
+              <Satellite size={23} />
             </span>
             <span>
               AgriTerrain <strong>AI</strong>
@@ -82,7 +151,40 @@ function WorkspaceShell({ children, title, description, headerActions }) {
           </button>
         </div>
 
-        <p className="workspace-menu-label">Workspace</p>
+        <p className="workspace-menu-label">General</p>
+
+        <nav className="workspace-navigation" aria-label="General navigation">
+          <Link to="/" onClick={closeSidebar}>
+            <Home size={19} />
+            <span>Home Page</span>
+          </Link>
+
+          <button
+            className="workspace-sidebar-notification"
+            type="button"
+            aria-expanded={notificationsOpen}
+            onClick={() =>
+              setNotificationsOpen((current) => !current)
+            }
+          >
+            <Bell size={19} />
+            <span>Notifications</span>
+          </button>
+        </nav>
+
+        {notificationsOpen && (
+          <div className="workspace-notification-panel">
+            <strong>Notifications</strong>
+            <p>No saved notifications yet.</p>
+            <small>
+              Account and workspace notices can appear here.
+            </small>
+          </div>
+        )}
+
+        <p className="workspace-menu-label workspace-menu-label-secondary">
+          Workspace
+        </p>
 
         <nav className="workspace-navigation" aria-label="Workspace navigation">
           <NavLink
@@ -113,31 +215,14 @@ function WorkspaceShell({ children, title, description, headerActions }) {
           </NavLink>
         </nav>
 
-        <p className="workspace-menu-label workspace-menu-label-secondary">
-          General
-        </p>
-
-        <nav className="workspace-navigation" aria-label="General navigation">
-          <Link to="/" onClick={closeSidebar}>
-            <Home size={19} />
-            <span>Home Page</span>
-          </Link>
-        </nav>
-
-        <div className="workspace-sidebar-tip">
-          <span>
-            <Sparkles size={17} />
-          </span>
-          <div>
-            <strong>Analysis tip</strong>
-            <p>Draw a focused boundary for faster and clearer AI results.</p>
-          </div>
-        </div>
-
         <div className="workspace-sidebar-footer">
           <div className="workspace-account">
             <span className="workspace-avatar" aria-hidden="true">
-              {getInitials(fullName) || <UserRound size={20} />}
+              {profilePhoto ? (
+                <img src={profilePhoto} alt="" />
+              ) : (
+                <UserRound size={20} />
+              )}
             </span>
             <div>
               <strong>{fullName}</strong>
@@ -177,10 +262,6 @@ function WorkspaceShell({ children, title, description, headerActions }) {
 
           <div className="workspace-header-actions">
             {headerActions}
-            <button className="workspace-notification" type="button" aria-label="Notifications">
-              <Bell size={20} />
-              <span />
-            </button>
             <div className="workspace-verified">
               <ShieldCheck size={18} />
               <span>

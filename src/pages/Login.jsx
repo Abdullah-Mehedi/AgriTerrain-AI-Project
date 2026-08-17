@@ -4,7 +4,7 @@ import {
   ArrowLeft,
   Eye,
   EyeOff,
-  Leaf,
+  Satellite,
   Lock,
   Mail,
   ShieldCheck,
@@ -118,7 +118,7 @@ function Login() {
         <div className="login-information-content">
           <Link className="login-brand" to="/">
             <span className="login-brand-icon">
-              <Leaf size={28} />
+              <Satellite size={27} />
             </span>
 
             <span>
@@ -127,24 +127,24 @@ function Login() {
           </Link>
 
           <div className="login-introduction">
-            <span className="login-tag">Satellite Intelligence Platform</span>
+            <span className="login-tag">Satellite Land Intelligence</span>
 
             <h1>
-              Understand agricultural land with reliable digital analysis.
+              Turn satellite imagery into clear land intelligence.
             </h1>
 
             <p>
-              Access land analysis results, satellite observations, saved
-              reports and agricultural insights from one secure dashboard.
+              Analyze selected areas, review detected fields, waterbodies and
+              buildings, and access saved results from one secure workspace.
             </p>
 
             <div className="login-benefit">
               <ShieldCheck size={25} />
 
               <div>
-                <strong>Secure project access</strong>
+                <strong>Secure analysis workspace</strong>
                 <span>
-                  Your session and account information are managed securely
+                  Your account and authenticated session are securely managed
                   through Supabase Authentication.
                 </span>
               </div>
@@ -152,7 +152,7 @@ function Login() {
           </div>
 
           <p className="login-copyright">
-            © 2026 AgriTerrain AI. Academic project demonstration.
+            © 2026 AgriTerrain AI
           </p>
         </div>
       </section>
@@ -166,8 +166,8 @@ function Login() {
 
           <div className="login-heading">
             <span>Welcome back</span>
-            <h2>Sign in to your account</h2>
-            <p>Enter your verified account information to continue.</p>
+            <h2>Access your analysis workspace</h2>
+            <p>Sign in securely to continue to AgriTerrain AI.</p>
           </div>
 
           <form className="login-form" onSubmit={handleSubmit} noValidate>

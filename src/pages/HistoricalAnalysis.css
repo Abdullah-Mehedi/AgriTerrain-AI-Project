@@ -1,0 +1,440 @@
+.historical-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  color: #276742;
+  background: #edf6ef;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+/* Small horizontal summary instead of huge hero. */
+.historical-summary-strip {
+  width: min(980px, 100%);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: white;
+  border: 1px solid #dce8df;
+  border-radius: 13px;
+}
+
+.historical-summary-strip > span {
+  width: 43px;
+  height: 43px;
+  display: grid;
+  place-items: center;
+  color: #16864f;
+  background: #edf8f0;
+  border-radius: 10px;
+}
+
+.historical-summary-main small,
+.historical-summary-main strong,
+.historical-summary-main p {
+  display: block;
+}
+
+.historical-summary-main small {
+  color: #16864f;
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.historical-summary-main strong {
+  margin-top: 2px;
+  color: #183b26;
+  font-size: 15px;
+}
+
+.historical-summary-main p {
+  margin: 3px 0 0;
+  color: #718078;
+  font-size: 9px;
+}
+
+.historical-summary-metrics {
+  display: flex;
+  gap: 7px;
+}
+
+.historical-summary-metrics > div {
+  min-width: 90px;
+  padding: 8px 10px;
+  background: #f6faf7;
+  border-radius: 8px;
+}
+
+.historical-summary-metrics small,
+.historical-summary-metrics strong {
+  display: block;
+}
+
+.historical-summary-metrics small {
+  color: #7a887e;
+  font-size: 8px;
+}
+
+.historical-summary-metrics strong {
+  margin-top: 2px;
+  color: #1c422b;
+  font-size: 10px;
+}
+
+.historical-timeline-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 17px;
+}
+
+.historical-timeline-heading h2 {
+  margin: 0;
+  color: #193b27;
+  font-size: 17px;
+}
+
+.historical-timeline-heading p {
+  margin: 2px 0 0;
+  color: #75837a;
+  font-size: 10px;
+}
+
+.historical-timeline-heading > div:last-child {
+  display: flex;
+  gap: 7px;
+}
+
+.historical-timeline-heading button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  color: white;
+  background: #16864f;
+  border: 1px solid #16864f;
+  border-radius: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.historical-timeline-heading button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.historical-timeline-heading .historical-cancel,
+.historical-timeline-heading .historical-done {
+  color: #53675a;
+  background: white;
+  border-color: #d5e2d8;
+}
+
+.historical-timeline-heading .historical-done.ready {
+  color: white;
+  background: #16864f;
+  border-color: #16864f;
+}
+
+.historical-rows {
+  display: grid;
+  gap: 9px;
+  margin-top: 11px;
+}
+
+.historical-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: white;
+  border: 1px solid #dfe9e2;
+  border-radius: 11px;
+}
+
+.historical-row.selected {
+  border-color: #2ca55e;
+  box-shadow: 0 0 0 3px rgba(22,134,79,.1);
+}
+
+.historical-row-number {
+  width: 35px;
+  height: 35px;
+  display: grid;
+  place-items: center;
+  color: white;
+  background: #16864f;
+  border-radius: 9px;
+  font-weight: 900;
+}
+
+.historical-row > div:nth-child(2) small,
+.historical-row > div:nth-child(2) strong {
+  display: block;
+}
+
+.historical-row > div:nth-child(2) small {
+  color: #16864f;
+  font-size: 8px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.historical-row > div:nth-child(2) strong {
+  margin-top: 2px;
+  color: #193b27;
+  font-size: 10px;
+}
+
+.historical-row-metrics {
+  display: flex;
+  gap: 14px;
+  color: #62736a;
+  font-size: 9px;
+}
+
+.historical-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.historical-row-actions button,
+.historical-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 9px;
+  color: #226743;
+  background: white;
+  border: 1px solid #d8e5db;
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.historical-row-actions button:first-child {
+  color: white;
+  background: #16864f;
+  border-color: #16864f;
+}
+
+.historical-row-actions .historical-delete {
+  color: #a34a4a;
+}
+
+.historical-select.selected {
+  color: white;
+  background: #16864f;
+  border-color: #16864f;
+}
+
+.historical-analyze-again {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 15px;
+  padding: 14px;
+  background: #eff8ed;
+  border: 1px solid #d1e8cd;
+  border-radius: 12px;
+}
+
+.historical-analyze-again > span {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  color: #16864f;
+  background: white;
+  border-radius: 10px;
+}
+
+.historical-analyze-again h2 {
+  margin: 0;
+  color: #183b26;
+  font-size: 14px;
+}
+
+.historical-analyze-again p {
+  margin: 3px 0 0;
+  color: #65766b;
+  font-size: 10px;
+}
+
+.historical-analyze-again button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 11px;
+  color: white;
+  background: #16864f;
+  border: 0;
+  border-radius: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.historical-empty {
+  min-height: 340px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  color: #16864f;
+  background: white;
+  border: 1px dashed #d2dfd5;
+  border-radius: 15px;
+  text-align: center;
+}
+
+.historical-empty h2 {
+  margin: 10px 0 3px;
+  color: #183b26;
+}
+
+.historical-empty p {
+  margin: 0 0 12px;
+  color: #6d7d72;
+}
+
+.historical-empty a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #17683f;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+@media (max-width: 800px) {
+  .historical-summary-strip {
+    grid-template-columns: auto 1fr;
+  }
+
+  .historical-summary-metrics {
+    grid-column: 1 / -1;
+  }
+
+  .historical-row {
+    grid-template-columns: auto 1fr;
+  }
+
+  .historical-row-metrics,
+  .historical-row-actions,
+  .historical-select {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 560px) {
+  .historical-summary-metrics {
+    flex-wrap: wrap;
+  }
+
+  .historical-timeline-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .historical-analyze-again {
+    grid-template-columns: auto 1fr;
+  }
+
+  .historical-analyze-again button {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
+}
+
+
+/* === AGRITERRAIN HISTORICAL MAIN IDENTITY V2 START === */
+
+.historical-summary-strip {
+  width: 100% !important;
+  min-height: 118px;
+  grid-template-columns:
+    auto
+    minmax(0, 1fr)
+    auto !important;
+  gap: 18px !important;
+  padding: 22px 24px !important;
+  border-radius: 16px !important;
+  box-shadow: 0 8px 24px rgba(19,69,39,.04);
+}
+
+.historical-summary-icon,
+.historical-summary-strip > span {
+  width: 56px !important;
+  height: 56px !important;
+  border-radius: 13px !important;
+}
+
+.historical-summary-main strong {
+  font-size: 24px !important;
+  line-height: 1.2;
+}
+
+.historical-summary-main p {
+  margin-top: 7px !important;
+  font-size: 11px !important;
+}
+
+.historical-summary-metrics {
+  gap: 10px !important;
+}
+
+.historical-summary-metrics > div {
+  min-width: 115px !important;
+  padding: 12px 14px !important;
+  border: 1px solid #e2ebe4;
+  border-radius: 10px !important;
+}
+
+.historical-summary-metrics small {
+  font-size: 9px !important;
+}
+
+.historical-summary-metrics strong {
+  margin-top: 4px !important;
+  font-size: 13px !important;
+}
+
+.historical-back-link {
+  border: 0;
+  cursor: pointer;
+}
+
+.historical-row > div:nth-child(2) small {
+  color: #193b27 !important;
+  font-size: 10px !important;
+  font-weight: 800 !important;
+  text-transform: none !important;
+}
+
+.historical-row > div:nth-child(2) strong {
+  color: #77857b !important;
+  font-size: 9px !important;
+  font-weight: 600;
+}
+
+@media (max-width: 950px) {
+  .historical-summary-strip {
+    grid-template-columns: auto 1fr !important;
+  }
+
+  .historical-summary-metrics {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+  }
+}
+
+/* === AGRITERRAIN HISTORICAL MAIN IDENTITY V2 END === */

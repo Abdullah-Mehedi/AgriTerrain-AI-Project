@@ -542,3 +542,339 @@
   .dashboard-toast,
   .dashboard-assistant { display: none !important; }
 }
+
+/* === AGRITERRAIN STEP1 DASHBOARD START === */
+/* Four real Quick Access tools = balanced 2 × 2 grid. */
+.dashboard-quick-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* The hero no longer needs CTA spacing after duplicate action removal. */
+.dashboard-welcome-card > div:first-child > p {
+  margin-bottom: 0;
+}
+
+.dashboard-profile-photo-block {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin: 14px 0;
+  padding: 12px;
+  background: #f8fbf8;
+  border: 1px solid #e1ebe3;
+  border-radius: 12px;
+  outline: none;
+}
+
+.dashboard-profile-photo-block:focus {
+  border-color: #16824b;
+  box-shadow: 0 0 0 3px rgba(22, 130, 75, .09);
+}
+
+.dashboard-profile-photo-avatar {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: white;
+  background: linear-gradient(135deg, #16824b, #0b6d3d);
+  border-radius: 50%;
+  font-weight: 800;
+}
+
+.dashboard-profile-photo-avatar img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.dashboard-profile-photo-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.dashboard-profile-photo-content > strong,
+.dashboard-profile-photo-content > small {
+  display: block;
+}
+
+.dashboard-profile-photo-content > strong {
+  color: #173a24;
+  font-size: 12px;
+}
+
+.dashboard-profile-photo-content > small {
+  margin-top: 2px;
+  color: #7a887e;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.dashboard-profile-photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.dashboard-profile-photo-actions label,
+.dashboard-profile-photo-actions button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: #17683f;
+  background: white;
+  border: 1px solid #d8e6dc;
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dashboard-profile-photo-actions label:hover,
+.dashboard-profile-photo-actions button:hover {
+  border-color: #9bc9aa;
+  background: #f2f9f4;
+}
+
+.dashboard-profile-photo-actions input {
+  display: none;
+}
+
+.dashboard-profile-photo-actions .profile-photo-remove {
+  color: #a74343;
+}
+
+.dashboard-profile-photo-actions button:disabled,
+.dashboard-profile-photo-actions label:has(input:disabled) {
+  opacity: .55;
+  cursor: wait;
+}
+
+.dashboard-profile-photo-message {
+  margin: -5px 0 11px;
+  color: #607168;
+  font-size: 9px;
+}
+
+@media (max-width: 720px) {
+  .dashboard-quick-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-profile-photo-block {
+    align-items: flex-start;
+  }
+}
+/* === AGRITERRAIN STEP1 DASHBOARD END === */
+
+/* === AGRITERRAIN UI POLISH DASHBOARD START === */
+/* ----------------------------------------------------------
+   QUICK ACCESS — visually equal importance to summary cards
+   ---------------------------------------------------------- */
+
+.dashboard-quick-card {
+  min-height: 116px !important;
+  gap: 17px !important;
+  padding: 21px 20px !important;
+  border-radius: 15px !important;
+}
+
+.dashboard-quick-card > span {
+  width: 52px !important;
+  height: 52px !important;
+  flex: 0 0 52px !important;
+  display: grid !important;
+  place-items: center !important;
+  border-radius: 13px !important;
+}
+
+.dashboard-quick-card > span svg {
+  width: 27px !important;
+  height: 27px !important;
+}
+
+.dashboard-quick-card > div {
+  min-width: 0;
+}
+
+.dashboard-quick-card strong {
+  display: block;
+  font-size: 14px !important;
+  line-height: 1.3 !important;
+  font-weight: 800 !important;
+}
+
+.dashboard-quick-card small {
+  display: block;
+  margin-top: 6px !important;
+  font-size: 10px !important;
+  line-height: 1.45 !important;
+}
+
+.dashboard-quick-card > svg {
+  width: 21px !important;
+  height: 21px !important;
+  flex: 0 0 21px;
+}
+
+/* ----------------------------------------------------------
+   PROFILE
+   ---------------------------------------------------------- */
+
+.dashboard-profile-heading-icon {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  display: grid;
+  place-items: center;
+  color: #176f45;
+  background: #edf8f0;
+  border: 1px solid #d9eade;
+  border-radius: 50%;
+}
+
+.dashboard-profile-photo-avatar {
+  border-radius: 50% !important;
+}
+
+.dashboard-profile-photo-avatar > svg {
+  width: 27px;
+  height: 27px;
+}
+
+/* Keep profile fallback visually identical to a normal avatar. */
+.dashboard-profile-photo-avatar:not(:has(img)) {
+  color: #fff;
+  background: linear-gradient(135deg, #16824b, #0b683d);
+}
+
+@media (max-width: 720px) {
+  .dashboard-quick-card {
+    min-height: 105px !important;
+    padding: 17px !important;
+  }
+
+  .dashboard-quick-card > span {
+    width: 47px !important;
+    height: 47px !important;
+    flex-basis: 47px !important;
+  }
+
+  .dashboard-quick-card strong {
+    font-size: 13px !important;
+  }
+}
+/* === AGRITERRAIN UI POLISH DASHBOARD END === */
+
+/* === AGRITERRAIN EDIT PROFILE NAME START === */
+.dashboard-profile-name-row {
+  align-items: flex-start !important;
+}
+
+.dashboard-profile-name-row dd {
+  min-width: 0;
+}
+
+.dashboard-name-display {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.dashboard-name-display > span {
+  overflow-wrap: anywhere;
+}
+
+.dashboard-name-display button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 7px;
+  color: #16864f;
+  background: #edf8f0;
+  border: 1px solid #d2e9d8;
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dashboard-name-editor {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dashboard-name-editor input {
+  width: min(280px, 100%);
+  min-height: 35px;
+  padding: 0 9px;
+  color: #183b26;
+  background: white;
+  border: 1px solid #bcd8c4;
+  border-radius: 7px;
+  outline: none;
+  font: inherit;
+  font-size: 11px;
+}
+
+.dashboard-name-editor input:focus {
+  border-color: #16864f;
+  box-shadow: 0 0 0 3px rgba(22, 134, 79, .09);
+}
+
+.dashboard-name-editor button {
+  min-height: 35px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px;
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dashboard-name-save {
+  color: white;
+  background: #16864f;
+  border: 1px solid #16864f;
+}
+
+.dashboard-name-cancel {
+  color: #52645a;
+  background: white;
+  border: 1px solid #d8e3da;
+}
+
+.dashboard-name-editor button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+.dashboard-name-message {
+  display: block;
+  margin-top: 5px;
+  color: #aa4848;
+  font-size: 8px;
+}
+
+.dashboard-name-message.success {
+  color: #16864f;
+}
+
+@media (max-width: 600px) {
+  .dashboard-name-display,
+  .dashboard-name-editor {
+    justify-content: flex-start;
+  }
+}
+/* === AGRITERRAIN EDIT PROFILE NAME END === */

@@ -1,3 +1,8 @@
+import {
+  clearReportMediaForUser,
+  deleteReportMedia,
+} from './reportMedia'
+
 const HISTORY_PREFIX = 'agriterrain_analysis_history'
 const MAX_HISTORY_RECORDS = 30
 
@@ -8,6 +13,28 @@ function storageKey(userId) {
 function safeNumber(value, fallback = 0) {
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
+}
+
+
+export function boundarySignature(boundary) {
+  if (!Array.isArray(boundary) || boundary.length < 3) return ''
+
+  const points = boundary.map((point) => {
+    if (!Array.isArray(point) || point.length < 2) return null
+
+    const latitude = Number(point[0])
+    const longitude = Number(point[1])
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return null
+    }
+
+    return [latitude, longitude]
+  })
+
+  if (points.some((point) => point === null)) return ''
+
+  return JSON.stringify(points)
 }
 
 export function getAnalysisHistory(userId) {
@@ -26,18 +53,34 @@ export function saveAnalysisHistoryRecord(userId, record) {
     0,
     MAX_HISTORY_RECORDS,
   )
+
   localStorage.setItem(storageKey(userId), JSON.stringify(next))
+
+  const retainedIds = new Set(next.map((item) => item.id))
+
+  history.forEach((item) => {
+    if (item?.id && !retainedIds.has(item.id)) {
+      void deleteReportMedia(userId, item.id).catch(() => {})
+    }
+  })
+
   return next
 }
 
 export function deleteAnalysisHistoryRecord(userId, recordId) {
   const next = getAnalysisHistory(userId).filter((record) => record.id !== recordId)
   localStorage.setItem(storageKey(userId), JSON.stringify(next))
+
+  void deleteReportMedia(userId, recordId).catch(() => {})
+
   return next
 }
 
 export function clearAnalysisHistory(userId) {
   localStorage.removeItem(storageKey(userId))
+
+  void clearReportMediaForUser(userId).catch(() => {})
+
   return []
 }
 

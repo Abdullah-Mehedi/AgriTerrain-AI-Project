@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import {
   Menu,
   X,
-  Sprout,
   UserRound,
   Map,
   Satellite,
@@ -122,7 +121,7 @@ function App() {
         <div className="container nav-container">
           <a href="#home" className="logo">
             <span className="logo-icon">
-              <Sprout size={23} />
+              <Satellite size={23} />
             </span>
 
             <span>
@@ -183,21 +182,20 @@ function App() {
           <div className="container hero-content">
             <div className="hero-text">
               <span className="hero-label">
-                AI-powered agricultural land analysis
+                AI-powered satellite land analysis
               </span>
 
               <h1>
-                Analyze Land.
+                Analyze Terrain.
                 <br />
-                Detect Fields.
+                Detect Features.
                 <br />
                 <strong>Generate Reports.</strong>
               </h1>
 
               <p>
-                Explore locations, view satellite imagery, and understand
-                agricultural land, waterbodies, and settlements through one
-                visual platform.
+                Explore satellite imagery, analyze selected land, and identify
+                fields, waterbodies, and buildings through one visual platform.
               </p>
 
               <div className="hero-buttons">
@@ -356,7 +354,7 @@ function App() {
           <div>
             <a href="#home" className="logo footer-logo">
               <span className="logo-icon">
-                <Sprout size={23} />
+                <Satellite size={23} />
               </span>
 
               <span>
@@ -365,21 +363,14 @@ function App() {
             </a>
 
             <p>
-              Satellite-Based Agricultural Land, Waterbody, and Settlement
-              Analysis System.
+              Satellite-based land, waterbody, field, and settlement
+              analysis platform.
             </p>
-          </div>
-
-          <div>
-            <h3>Project</h3>
-            <p>React and Vite</p>
-            <p>Open-source tools</p>
-            <p>CSE327 demonstration</p>
           </div>
         </div>
 
         <div className="container copyright">
-          © 2026 AgriTerrain AI — CSE327 Demo Project
+          © 2026 AgriTerrain AI
         </div>
       </footer>
 
@@ -405,7 +396,7 @@ function App() {
             </button>
 
             <div className="modal-icon">
-              <Sprout size={30} />
+              <Satellite size={30} />
             </div>
 
             <span className="modal-label">Next development phase</span>
