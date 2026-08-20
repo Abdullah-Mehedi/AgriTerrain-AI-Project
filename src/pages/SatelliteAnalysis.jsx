@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import L from 'leaflet'
 import {
@@ -218,6 +219,15 @@ function serviceLabel(serviceStatus, preparingModel) {
 }
 
 function SatelliteAnalysis() {
+
+  // AGRITERRAIN FULLSCREEN DETECTION DOCK — UI timer only
+  const fullscreenRunStartedAtRef = useRef(null)
+  const fullscreenAnalysisSeenRunningRef = useRef(false)
+  const [fullscreenElapsedSeconds, setFullscreenElapsedSeconds] =
+    useState(0)
+  const [fullscreenRunCompleted, setFullscreenRunCompleted] =
+    useState(false)
+
   const { user } = useAuth()
   const routeLocation = useLocation()
   const historicalNavigate = useNavigate()
@@ -852,7 +862,76 @@ function SatelliteAnalysis() {
     }
   }
 
-  async function runAnalysis() {
+  
+  // Fullscreen runtime display — UI only.
+  // Scan click starts the clock immediately; detection state only stops it.
+  useEffect(() => {
+    if (!isMapFullscreen) {
+      return undefined
+    }
+
+    const updateFullscreenTimer = () => {
+      const startedAt =
+        fullscreenRunStartedAtRef.current
+
+      if (!startedAt) {
+        return
+      }
+
+      setFullscreenElapsedSeconds(
+        Math.max(
+          0,
+          Math.floor(
+            (Date.now() - startedAt) / 1000,
+          ),
+        ),
+      )
+    }
+
+    updateFullscreenTimer()
+
+    const timerId = window.setInterval(
+      updateFullscreenTimer,
+      250,
+    )
+
+    return () => {
+      window.clearInterval(timerId)
+    }
+  }, [isMapFullscreen])
+
+  useEffect(() => {
+    const startedAt =
+      fullscreenRunStartedAtRef.current
+
+    if (!startedAt) {
+      return
+    }
+
+    if (analysis) {
+      fullscreenAnalysisSeenRunningRef.current = true
+      return
+    }
+
+    if (
+      fullscreenAnalysisSeenRunningRef.current
+    ) {
+      setFullscreenElapsedSeconds(
+        Math.max(
+          1,
+          Math.round(
+            (Date.now() - startedAt) / 1000,
+          ),
+        ),
+      )
+
+      fullscreenRunStartedAtRef.current = null
+      fullscreenAnalysisSeenRunningRef.current = false
+      setFullscreenRunCompleted(true)
+    }
+  }, [analysis])
+
+async function runAnalysis() {
     if (!serviceStatus.online) {
       setAnalysisMessage('The real AI service is offline. No fake result will be generated.')
       return
@@ -1792,7 +1871,263 @@ function SatelliteAnalysis() {
           <p>{analysis.location} · {analysis.areaHectares.toFixed(2)} ha</p>
         </section>
       )}
-    </WorkspaceShell>
+    
+
+      {/* AGRITERRAIN FULLSCREEN MAP CONTROLS V4 */}
+      {isMapFullscreen &&
+        createPortal(
+          <>
+            <div
+              className="fullscreen-map-scan-control"
+              onClickCapture={() => {
+                fullscreenRunStartedAtRef.current =
+                  Date.now()
+                fullscreenAnalysisSeenRunningRef.current =
+                  false
+                setFullscreenElapsedSeconds(0)
+                setFullscreenRunCompleted(false)
+              }}
+              ref={(node) => {
+                if (!node) return
+
+                window.requestAnimationFrame(() => {
+                  const root =
+                    document.fullscreenElement ||
+                    document
+
+                  const ownButton =
+                    node.querySelector('button')
+
+                  const candidates = Array.from(
+                    root.querySelectorAll(
+                      'button, [role="button"], [tabindex], a, div',
+                    ),
+                  )
+                    .filter(
+                      (element) =>
+                        element !== ownButton &&
+                        !node.contains(element),
+                    )
+                    .map((element) => ({
+                      element,
+                      rect:
+                        element.getBoundingClientRect(),
+                    }))
+                    .filter((item) => {
+                      const r = item.rect
+
+                      const squareEnough =
+                        Math.abs(
+                          r.width - r.height,
+                        ) <= 14
+
+                      return (
+                        r.width >= 34 &&
+                        r.width <= 64 &&
+                        r.height >= 34 &&
+                        r.height <= 64 &&
+                        squareEnough &&
+                        r.left >= 0 &&
+                        r.left <
+                          window.innerWidth * 0.35 &&
+                        r.top >= 0 &&
+                        r.bottom <=
+                          window.innerHeight
+                      )
+                    })
+
+                  const groups = []
+
+                  candidates.forEach((item) => {
+                    let group = groups.find(
+                      (entry) =>
+                        Math.abs(
+                          entry.left -
+                            item.rect.left,
+                        ) <= 8,
+                    )
+
+                    if (!group) {
+                      group = {
+                        left: item.rect.left,
+                        items: [],
+                      }
+
+                      groups.push(group)
+                    }
+
+                    group.items.push(item)
+                  })
+
+                  groups.sort(
+                    (a, b) =>
+                      b.items.length -
+                      a.items.length,
+                  )
+
+                  const group = groups[0]
+
+                  if (group?.items?.length) {
+                    const rects =
+                      group.items.map(
+                        (item) => item.rect,
+                      )
+
+                    const bottom = Math.max(
+                      ...rects.map(
+                        (rect) => rect.bottom,
+                      ),
+                    )
+
+                    const reference =
+                      rects.find(
+                        (rect) =>
+                          Math.abs(
+                            rect.width -
+                              rect.height,
+                          ) <= 8,
+                      ) || rects[0]
+
+                    const size = Math.round(
+                      Math.min(
+                        reference.width,
+                        reference.height,
+                      ),
+                    )
+
+                    node.style.left =
+                      `${Math.round(
+                        group.left,
+                      )}px`
+
+                    node.style.top =
+                      `${Math.round(
+                        bottom + 8,
+                      )}px`
+
+                    node.style.width =
+                      `${size}px`
+
+                    node.style.height =
+                      `${size}px`
+                  }
+                })
+              }}
+            >
+              <button
+                          className="run-analysis-button"
+                          type="button"
+                          onClick={runAnalysis}
+                          disabled={runDisabled}
+                         aria-label="" title="">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="20"
+                  height="20"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                  <path d="M16 3h3a2 2 0 0 1 2 2v3" />
+                  <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+                  <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+
+                  <circle cx="12" cy="12" r="5.2" />
+
+                  <path d="M12 5v14" />
+                  <path d="M5 12h14" />
+                </svg>
+              </button>
+            </div>
+
+            <div
+              className="fullscreen-map-runtime-card"
+              ref={(node) => {
+                if (!node) return
+
+                window.requestAnimationFrame(() => {
+                  const root =
+                    document.fullscreenElement ||
+                    document
+
+                  const elements = Array.from(
+                    root.querySelectorAll(
+                      'button, [role="button"]',
+                    ),
+                  )
+
+                  const detectionLayers =
+                    elements.find((element) => {
+                      const label =
+                        `${
+                          element.getAttribute(
+                            'aria-label',
+                          ) || ''
+                        } ${
+                          element.getAttribute(
+                            'title',
+                          ) || ''
+                        } ${
+                          element.textContent || ''
+                        }`
+
+                      return /detection\s*layers/i.test(
+                        label,
+                      )
+                    })
+
+                  if (!detectionLayers) return
+
+                  const rect =
+                    detectionLayers.getBoundingClientRect()
+
+                  node.style.width =
+                    `${Math.round(
+                      rect.width,
+                    )}px`
+
+                  node.style.height =
+                    `${Math.round(
+                      rect.height,
+                    )}px`
+
+                  node.style.top =
+                    `${Math.round(
+                      rect.top,
+                    )}px`
+
+                  node.style.left =
+                    `${Math.round(
+                      Math.max(
+                        10,
+                        rect.left -
+                          rect.width -
+                          10,
+                      ),
+                    )}px`
+                })
+              }}
+              aria-live="polite"
+            >
+              <strong>
+                {fullscreenElapsedSeconds < 60
+                  ? `${fullscreenElapsedSeconds}s`
+                  : `${Math.floor(
+                      fullscreenElapsedSeconds /
+                        60,
+                    )}m ${fullscreenElapsedSeconds %
+                      60}s`}
+              </strong>
+            </div>
+          </>,
+          document.fullscreenElement ||
+            document.body,
+        )}
+</WorkspaceShell>
   )
 }
 
