@@ -605,9 +605,14 @@ def get_visible_field_boundaries(
             f"confidence={float(confidence):.3f}"
         )
 
+        # The acceptance checks above use a corner-level approximation, but
+        # the old response returned an almost raw pixel contour. That made a
+        # valid field look jagged and organic on Leaflet. Keep the contour
+        # evidence (never replace it with a fabricated rectangle), while
+        # removing small raster stair-steps and one-pixel spikes.
         simplified = cv2.approxPolyDP(
             contour,
-            max(1.2, perimeter * 0.004),
+            max(1.5, perimeter * 0.012),
             True,
         ).reshape(-1, 2)
         if len(simplified) < 3:
@@ -659,7 +664,7 @@ def get_visible_field_boundaries(
 
                     hole_simplified = cv2.approxPolyDP(
                         hole_contour,
-                        max(1.0, hole_perimeter * 0.006),
+                        max(1.0, hole_perimeter * 0.010),
                         True,
                     ).reshape(-1, 2)
 

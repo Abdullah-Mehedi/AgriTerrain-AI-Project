@@ -966,7 +966,19 @@ def _call_signature(signature: Any, image_batch: np.ndarray) -> np.ndarray:
 
 
 @_timed_stage("OpenEarthMap")
-def run_inference(image: Image.Image, quality: str) -> np.ndarray:
+def run_inference(
+    image: Image.Image,
+    quality: str,
+    *,
+    return_identity_prediction: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Run OpenEarthMap and optionally return the already-computed base view.
+
+    Accurate inference includes the unflipped identity view in its four-view
+    average. Returning that view lets Standard reuse it for the fast water
+    scout instead of executing the same model a fifth time.
+    """
+
     _, signature = get_model()
     base = np.asarray(image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.BICUBIC))
     base = base.astype(np.float32)
@@ -994,7 +1006,13 @@ def run_inference(image: Image.Image, quality: str) -> np.ndarray:
             probabilities = _normalise_model_output(output)
             restored = np.ascontiguousarray(reverse_transform(probabilities))
             predictions.append(restored)
-    return np.mean(np.stack(predictions, axis=0), axis=0)
+    combined_prediction = np.mean(
+        np.stack(predictions, axis=0),
+        axis=0,
+    )
+    if return_identity_prediction:
+        return combined_prediction, predictions[0]
+    return combined_prediction
 
 
 def clean_binary_mask(binary_mask: np.ndarray, settings: dict[str, Any]) -> np.ndarray:
@@ -1771,6 +1789,509 @@ def merge_fast_water_rescue(
     )
 
 
+@_timed_stage("Visible pond rescue")
+def rescue_visible_ponds(
+    image: Image.Image,
+    probabilities: np.ndarray,
+    selected_mask: np.ndarray,
+    building_mask: np.ndarray,
+    existing_water_mask: np.ndarray,
+    existing_confidence: np.ndarray,
+    sentinel_prior: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Recover compact dark/algae ponds with scene-adaptive Sentinel support.
+
+    Sentinel values vary greatly between scenes and small ponds. A fixed
+    absolute threshold can therefore disable the source completely. This
+    rescue finds locally strong Sentinel components, then refines only missed
+    components against smooth pond-like Esri pixels. GrabCut follows the real
+    visible edge; it never creates a rectangle or a coordinate fallback.
+    """
+
+    diagnostics: dict[str, Any] = {
+        "sentinel_reference": 0.0,
+        "sentinel_threshold": 0.0,
+        "components_considered": 0,
+        "components_accepted": 0,
+        "rescued_pixels": 0,
+        "rejected_existing": 0,
+        "rejected_border": 0,
+        "rejected_building": 0,
+        "rejected_surface": 0,
+        "rejected_shape": 0,
+        "rejected_tree": 0,
+        "rejected_support": 0,
+    }
+
+    if sentinel_prior is None:
+        diagnostics["status"] = "sentinel-unavailable"
+        return existing_water_mask, existing_confidence, diagnostics
+
+    selected = np.asarray(selected_mask, dtype=bool)
+    buildings = np.asarray(building_mask, dtype=bool) & selected
+    existing = np.asarray(existing_water_mask, dtype=bool) & selected
+    available = selected & ~buildings
+
+    sentinel_probability = np.clip(
+        np.asarray(sentinel_prior, dtype=np.float32),
+        0.0,
+        1.0,
+    )
+    if sentinel_probability.shape != selected.shape:
+        diagnostics["status"] = "invalid-sentinel-size"
+        return existing, existing_confidence, diagnostics
+
+    available_values = sentinel_probability[available]
+    if available_values.size < 64:
+        diagnostics["status"] = "empty-selection"
+        return existing, existing_confidence, diagnostics
+
+    sentinel_reference = float(
+        np.percentile(available_values, 99.0)
+    )
+    sentinel_high_reference = float(
+        np.percentile(available_values, 99.8)
+    )
+    diagnostics["sentinel_reference"] = round(
+        sentinel_reference,
+        4,
+    )
+
+    # Do not manufacture a relative hotspot when Sentinel contains no useful
+    # water signal. The second reference catches a small but very strong pond.
+    if (
+        sentinel_reference < 0.035
+        and sentinel_high_reference < 0.080
+    ):
+        diagnostics["status"] = "no-sentinel-water-signal"
+        return existing, existing_confidence, diagnostics
+
+    sentinel_threshold = float(
+        np.clip(
+            max(
+                sentinel_reference * 0.10,
+                sentinel_high_reference * 0.035,
+            ),
+            0.012,
+            0.20,
+        )
+    )
+    diagnostics["sentinel_threshold"] = round(
+        sentinel_threshold,
+        4,
+    )
+
+    rgb = np.asarray(
+        image.resize(selected.shape[::-1])
+    ).astype(np.uint8)
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    hue = hsv[:, :, 0].astype(np.float32)
+    saturation = hsv[:, :, 1].astype(np.float32)
+    value = hsv[:, :, 2].astype(np.float32)
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    local_mean = cv2.blur(gray, (9, 9))
+    local_square_mean = cv2.blur(gray * gray, (9, 9))
+    local_std = np.sqrt(
+        np.maximum(
+            local_square_mean - local_mean * local_mean,
+            0.0,
+        )
+    )
+
+    dark_smooth = (
+        (value <= 95.0)
+        & (local_std <= 17.0)
+    )
+    algae_smooth = (
+        (hue >= 28.0)
+        & (hue <= 90.0)
+        & (saturation >= 30.0)
+        & (value <= 130.0)
+        & (local_std <= 16.0)
+    )
+    visible_pond_surface = (
+        (dark_smooth | algae_smooth)
+        & available
+    )
+
+    sentinel_components = (
+        (sentinel_probability >= sentinel_threshold)
+        & available
+    )
+    component_count, labels, stats, _ = (
+        cv2.connectedComponentsWithStats(
+            sentinel_components.astype(np.uint8),
+            connectivity=8,
+        )
+    )
+
+    existing_buffer = cv2.dilate(
+        existing.astype(np.uint8),
+        np.ones((7, 7), dtype=np.uint8),
+        iterations=1,
+    ).astype(bool)
+    selection_interior = cv2.erode(
+        selected.astype(np.uint8),
+        np.ones((9, 9), dtype=np.uint8),
+        iterations=1,
+    ).astype(bool)
+    selection_border = selected & ~selection_interior
+
+    water_probability = probabilities[:, :, CLASS_IDS["water"]]
+    tree_probability = probabilities[:, :, CLASS_IDS["tree"]]
+    crop_probability = probabilities[:, :, CLASS_IDS["crop"]]
+
+    rescued = np.zeros_like(selected, dtype=bool)
+    rescue_confidence = np.zeros_like(
+        water_probability,
+        dtype=np.float32,
+    )
+    selected_pixels = max(int(np.count_nonzero(selected)), 1)
+    maximum_component_pixels = max(
+        500,
+        round(selected_pixels * 0.12),
+    )
+
+    for label in range(1, component_count):
+        sentinel_component = labels == label
+        seed_pixels = int(stats[label, cv2.CC_STAT_AREA])
+        if seed_pixels < 50:
+            continue
+
+        diagnostics["components_considered"] += 1
+
+        existing_overlap = int(
+            np.count_nonzero(
+                sentinel_component & existing_buffer
+            )
+        )
+        if existing_overlap >= max(10, round(seed_pixels * 0.05)):
+            diagnostics["rejected_existing"] += 1
+            continue
+
+        border_ratio = float(
+            np.count_nonzero(
+                sentinel_component & selection_border
+            )
+            / max(seed_pixels, 1)
+        )
+        if border_ratio > 0.20:
+            diagnostics["rejected_border"] += 1
+            continue
+
+        sure_surface = sentinel_component & visible_pond_surface
+        sure_pixels = int(np.count_nonzero(sure_surface))
+        if sure_pixels < max(12, round(seed_pixels * 0.05)):
+            diagnostics["rejected_surface"] += 1
+            continue
+
+        x = int(stats[label, cv2.CC_STAT_LEFT])
+        y = int(stats[label, cv2.CC_STAT_TOP])
+        width = int(stats[label, cv2.CC_STAT_WIDTH])
+        height = int(stats[label, cv2.CC_STAT_HEIGHT])
+        margin = max(
+            24,
+            min(55, round(max(width, height) * 0.55)),
+        )
+        x0 = max(0, x - margin)
+        y0 = max(0, y - margin)
+        x1 = min(selected.shape[1], x + width + margin)
+        y1 = min(selected.shape[0], y + height + margin)
+
+        roi = np.zeros_like(selected, dtype=bool)
+        roi[y0:y1, x0:x1] = True
+        nearby_seed = cv2.dilate(
+            sentinel_component.astype(np.uint8),
+            np.ones((31, 31), dtype=np.uint8),
+            iterations=1,
+        ).astype(bool)
+        auxiliary_surface = (
+            (value <= 80.0)
+            & (local_std <= 9.0)
+            & visible_pond_surface
+            & nearby_seed
+            & roi
+            & ~existing_buffer
+        )
+        sure_foreground = (
+            (sure_surface | auxiliary_surface)
+            & roi
+            & ~existing_buffer
+        )
+
+        local_available = available[y0:y1, x0:x1]
+        local_existing = existing_buffer[y0:y1, x0:x1]
+        local_surface = visible_pond_surface[y0:y1, x0:x1]
+        local_sure = sure_foreground[y0:y1, x0:x1]
+        grabcut_mask = np.full(
+            local_available.shape,
+            cv2.GC_PR_BGD,
+            dtype=np.uint8,
+        )
+        grabcut_mask[local_surface] = cv2.GC_PR_FGD
+        grabcut_mask[local_sure] = cv2.GC_FGD
+        grabcut_mask[
+            ~local_available | local_existing
+        ] = cv2.GC_BGD
+
+        background_model = np.zeros((1, 65), dtype=np.float64)
+        foreground_model = np.zeros((1, 65), dtype=np.float64)
+        try:
+            cv2.grabCut(
+                np.ascontiguousarray(bgr[y0:y1, x0:x1]),
+                grabcut_mask,
+                None,
+                background_model,
+                foreground_model,
+                4,
+                cv2.GC_INIT_WITH_MASK,
+            )
+            local_grown = (
+                (grabcut_mask == cv2.GC_FGD)
+                | (grabcut_mask == cv2.GC_PR_FGD)
+            )
+            grown = np.zeros_like(selected, dtype=bool)
+            grown[y0:y1, x0:x1] = local_grown
+        except cv2.error as error:
+            print(f"VISIBLE POND GRABCUT FALLBACK: {error}")
+            grown = sure_foreground.copy()
+
+        grown &= (
+            visible_pond_surface
+            & roi
+            & available
+            & ~existing_buffer
+        )
+
+        grown_count, grown_labels, _, _ = (
+            cv2.connectedComponentsWithStats(
+                grown.astype(np.uint8),
+                connectivity=8,
+            )
+        )
+        connected = np.zeros_like(selected, dtype=bool)
+        for grown_label in range(1, grown_count):
+            grown_component = grown_labels == grown_label
+            if np.count_nonzero(
+                grown_component & sure_foreground
+            ) >= 4:
+                connected |= grown_component
+
+        connected = cv2.morphologyEx(
+            connected.astype(np.uint8),
+            cv2.MORPH_CLOSE,
+            np.ones((5, 5), dtype=np.uint8),
+        ).astype(bool)
+        connected = cv2.morphologyEx(
+            connected.astype(np.uint8),
+            cv2.MORPH_OPEN,
+            np.ones((3, 3), dtype=np.uint8),
+        ).astype(bool)
+        connected &= available & ~existing_buffer
+
+        result_count, result_labels, result_stats, _ = (
+            cv2.connectedComponentsWithStats(
+                connected.astype(np.uint8),
+                connectivity=8,
+            )
+        )
+
+        for result_label in range(1, result_count):
+            component = result_labels == result_label
+            pixel_count = int(
+                result_stats[result_label, cv2.CC_STAT_AREA]
+            )
+            if (
+                pixel_count < 100
+                or pixel_count > maximum_component_pixels
+            ):
+                diagnostics["rejected_shape"] += 1
+                continue
+
+            sentinel_seed_overlap = int(
+                np.count_nonzero(
+                    component & sentinel_component
+                )
+            )
+            if sentinel_seed_overlap < 8:
+                diagnostics["rejected_support"] += 1
+                continue
+
+            contours, _ = cv2.findContours(
+                component.astype(np.uint8),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            if not contours:
+                diagnostics["rejected_shape"] += 1
+                continue
+
+            contour = max(contours, key=cv2.contourArea)
+            contour_area = float(cv2.contourArea(contour))
+            hull = cv2.convexHull(contour)
+            hull_area = max(float(cv2.contourArea(hull)), 1.0)
+            solidity = contour_area / hull_area
+            _, _, component_width, component_height = (
+                cv2.boundingRect(contour)
+            )
+            aspect_ratio = max(
+                component_width / max(component_height, 1),
+                component_height / max(component_width, 1),
+            )
+            if aspect_ratio > 6.0 or solidity < 0.45:
+                diagnostics["rejected_shape"] += 1
+                continue
+
+            component_u8 = component.astype(np.uint8)
+            building_ring = (
+                cv2.dilate(
+                    component_u8,
+                    np.ones((15, 15), dtype=np.uint8),
+                    iterations=1,
+                ).astype(bool)
+                & ~component
+                & selected
+            )
+            ring_pixels = int(np.count_nonzero(building_ring))
+            building_ring_ratio = (
+                float(
+                    np.count_nonzero(
+                        building_ring & buildings
+                    )
+                    / ring_pixels
+                )
+                if ring_pixels
+                else 0.0
+            )
+            if building_ring_ratio >= 0.08:
+                diagnostics["rejected_building"] += 1
+                continue
+
+            tree_values = tree_probability[component]
+            crop_values = crop_probability[component]
+            water_values = water_probability[component]
+            tree_dominance = float(
+                np.count_nonzero(
+                    tree_values
+                    > np.maximum(crop_values, water_values) + 0.10
+                )
+                / max(pixel_count, 1)
+            )
+            if tree_dominance > 0.48:
+                diagnostics["rejected_tree"] += 1
+                continue
+
+            sentinel_mean = float(
+                sentinel_probability[component].mean()
+            )
+            sentinel_peak = float(
+                sentinel_probability[component].max()
+            )
+            has_broad_sentinel_support = (
+                sentinel_mean >= sentinel_threshold * 0.50
+                and sentinel_peak >= sentinel_threshold * 1.25
+            )
+            has_strong_sentinel_peak = (
+                sentinel_peak >= sentinel_threshold * 3.00
+            )
+            if not (
+                has_broad_sentinel_support
+                or has_strong_sentinel_peak
+            ):
+                diagnostics["rejected_support"] += 1
+                continue
+
+            surface_ratio = float(
+                np.count_nonzero(
+                    component & visible_pond_surface
+                )
+                / max(pixel_count, 1)
+            )
+            sentinel_strength = float(
+                np.clip(
+                    sentinel_mean / max(sentinel_threshold, 1e-6),
+                    0.0,
+                    2.0,
+                )
+                / 2.0
+            )
+            model_strength = float(
+                np.clip(
+                    max(
+                        float(water_values.mean()) * 1.5,
+                        float(water_values.max()),
+                    ),
+                    0.0,
+                    1.0,
+                )
+            )
+            shape_strength = float(
+                np.clip((solidity - 0.40) / 0.50, 0.0, 1.0)
+            )
+            confidence = float(
+                np.clip(
+                    0.45
+                    + 0.18 * sentinel_strength
+                    + 0.14 * surface_ratio
+                    + 0.10 * shape_strength
+                    + 0.13 * model_strength,
+                    0.58,
+                    0.92,
+                )
+            )
+
+            new_component = component & ~rescued
+            if not np.any(new_component):
+                continue
+            rescued |= new_component
+            rescue_confidence[new_component] = np.maximum(
+                rescue_confidence[new_component],
+                confidence,
+            )
+            diagnostics["components_accepted"] += 1
+
+            print(
+                "VISIBLE POND RESCUE ACCEPTED: "
+                f"pixels={pixel_count}, "
+                f"sentinel_mean={sentinel_mean:.3f}, "
+                f"sentinel_peak={sentinel_peak:.3f}, "
+                f"surface={surface_ratio:.3f}, "
+                f"solidity={solidity:.3f}, "
+                f"tree_dominance={tree_dominance:.3f}, "
+                f"building_ring={building_ring_ratio:.3f}, "
+                f"confidence={confidence:.3f}"
+            )
+
+    combined_mask = (existing | rescued) & selected
+    combined_confidence = np.maximum(
+        existing_confidence,
+        rescue_confidence,
+    )
+    diagnostics["rescued_pixels"] = int(
+        np.count_nonzero(rescued)
+    )
+    diagnostics["status"] = "complete"
+
+    print(
+        "VISIBLE POND RESCUE DIAGNOSTICS: "
+        f"threshold={sentinel_threshold:.4f}, "
+        f"considered={diagnostics['components_considered']}, "
+        f"accepted={diagnostics['components_accepted']}, "
+        f"pixels={diagnostics['rescued_pixels']}, "
+        f"existing={diagnostics['rejected_existing']}, "
+        f"border={diagnostics['rejected_border']}, "
+        f"building={diagnostics['rejected_building']}, "
+        f"surface={diagnostics['rejected_surface']}, "
+        f"shape={diagnostics['rejected_shape']}, "
+        f"tree={diagnostics['rejected_tree']}, "
+        f"support={diagnostics['rejected_support']}"
+    )
+
+    return combined_mask, combined_confidence, diagnostics
+
+
 @_timed_stage("Water V2")
 def refine_water_mask(
     image: Image.Image,
@@ -2169,15 +2690,15 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     image = fetch_satellite_image(box)
     selected_mask = polygon_pixel_mask(boundary, box, image.size)
 
-    # Shared external-source state. Balanced V2 starts these independent
-    # sources while accurate OpenEarthMap inference is already running.
-    # No detection rule, threshold or acceptance condition is changed.
+    # Shared external-source state. These independent network/data sources run
+    # while OpenEarthMap is using the CPU. Detection rules remain unchanged.
     microsoft_buildings: list[dict[str, Any]] = []
 
     sentinel_water_prior: np.ndarray | None = None
     sentinel_water_metadata: dict[str, Any] = {}
     water_detection_status = "openearthmap-only"
     water_detection_detail = ""
+    fast_water_probabilities: np.ndarray | None = None
 
     def fetch_microsoft_buildings() -> list[dict[str, Any]]:
         return get_building_footprints(
@@ -2209,84 +2730,77 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         f"openearthmap={effective_quality}"
     )
 
-    if request.analysis_mode in ("standard", "faster"):
-        overlap_started = time.perf_counter()
+    overlap_labels = {
+        "standard": "STANDARD ACCURATE OVERLAP",
+        "balanced": "BALANCED V3 OVERLAP",
+        "faster": "FASTER V2 OVERLAP",
+    }
+    overlap_label = overlap_labels[request.analysis_mode]
+    overlap_started = time.perf_counter()
 
-        overlap_label = (
-            "STANDARD ACCURATE OVERLAP"
-            if request.analysis_mode == "standard"
-            else "FASTER V2 OVERLAP"
+    print(
+        f"{overlap_label}: "
+        "OpenEarthMap + Microsoft + Sentinel"
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        microsoft_future = executor.submit(
+            fetch_microsoft_buildings
+        )
+        sentinel_future = executor.submit(
+            fetch_sentinel_water
         )
 
-        print(
-            f"{overlap_label}: "
-            "OpenEarthMap + Microsoft + Sentinel"
-        )
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            microsoft_future = executor.submit(
-                fetch_microsoft_buildings
-            )
-            sentinel_future = executor.submit(
-                fetch_sentinel_water
-            )
-
-            try:
-                probabilities = run_inference(
-                    image,
-                    effective_quality,
-                )
-            except ModelSetupError as error:
-                raise HTTPException(
-                    status_code=503,
-                    detail=str(error),
-                ) from error
-
-            external_wait_started = time.perf_counter()
-
-            try:
-                microsoft_buildings = microsoft_future.result()
-            except Exception as error:
-                print(
-                    f"Microsoft building lookup failed: {error}"
-                )
-
-            try:
-                (
-                    sentinel_water_prior,
-                    sentinel_water_metadata,
-                ) = sentinel_future.result()
-                water_detection_status = "complete"
-            except Exception as error:
-                water_detection_detail = str(error)
-                print(
-                    "Sentinel-2 water confirmation unavailable: "
-                    f"{error}"
-                )
-
-            print(
-                f"PERF {overlap_label} external wait after OEM: "
-                f"{time.perf_counter() - external_wait_started:.2f}s"
-            )
-
-        print(
-            f"PERF {overlap_label} span: "
-            f"{time.perf_counter() - overlap_started:.2f}s"
-        )
-
-    else:
-        # New Balanced = former Faster.
-        # Preserve its original fast OEM-first behavior.
         try:
-            probabilities = run_inference(
+            inference_result = run_inference(
                 image,
                 effective_quality,
+                return_identity_prediction=(
+                    request.analysis_mode == "standard"
+                ),
             )
         except ModelSetupError as error:
             raise HTTPException(
                 status_code=503,
                 detail=str(error),
             ) from error
+
+        if isinstance(inference_result, tuple):
+            probabilities, fast_water_probabilities = inference_result
+        else:
+            probabilities = inference_result
+
+        external_wait_started = time.perf_counter()
+
+        try:
+            microsoft_buildings = microsoft_future.result()
+        except Exception as error:
+            print(
+                f"Microsoft building lookup failed: {error}"
+            )
+
+        try:
+            (
+                sentinel_water_prior,
+                sentinel_water_metadata,
+            ) = sentinel_future.result()
+            water_detection_status = "complete"
+        except Exception as error:
+            water_detection_detail = str(error)
+            print(
+                "Sentinel-2 water confirmation unavailable: "
+                f"{error}"
+            )
+
+        print(
+            f"PERF {overlap_label} external wait after OEM: "
+            f"{time.perf_counter() - external_wait_started:.2f}s"
+        )
+
+    print(
+        f"PERF {overlap_label} span: "
+        f"{time.perf_counter() - overlap_started:.2f}s"
+    )
 
     if probabilities.shape[:2] != selected_mask.shape:
         probabilities = cv2.resize(
@@ -2333,46 +2847,7 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     # at least one footprint.
     semantic_buildings = list(detections["building"])
 
-    if request.analysis_mode == "balanced":
-        # New Balanced = former Faster:
-        # Microsoft + Sentinel run together after fast OEM.
-        external_started = time.perf_counter()
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            microsoft_future = executor.submit(
-                fetch_microsoft_buildings
-            )
-            sentinel_future = executor.submit(
-                fetch_sentinel_water
-            )
-
-            try:
-                microsoft_buildings = microsoft_future.result()
-            except Exception as error:
-                print(
-                    f"Microsoft building lookup failed: {error}"
-                )
-
-            try:
-                (
-                    sentinel_water_prior,
-                    sentinel_water_metadata,
-                ) = sentinel_future.result()
-                water_detection_status = "complete"
-            except Exception as error:
-                water_detection_detail = str(error)
-                print(
-                    "Sentinel-2 water confirmation unavailable: "
-                    f"{error}"
-                )
-
-        print(
-            "PERF Balanced external parallel wall: "
-            f"{time.perf_counter() - external_started:.2f}s"
-        )
-
-    # Standard and Faster already received both external sources
-    # during the overlapped stage above.
+    # Every mode already received both external sources during the overlap.
 
     # Water V2 needs the Microsoft mask before final building fusion.
     building_exclusion_mask = (
@@ -2423,24 +2898,25 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     )
 
     # ------------------------------------------------------------
-    # WATER RESCUE V3 — BALANCED ONLY
+    # WATER RESCUE V3 — STANDARD ONLY
     #
-    # Run the existing one-view Faster inference as a WATER SCOUT.
-    # We then run the EXISTING Water V2 against that probability map.
+    # Reuse the identity prediction already produced by accurate four-view
+    # inference as the one-view WATER SCOUT. We then run the existing Water V2
+    # against that probability map without executing OpenEarthMap a fifth time.
     #
     # Only extra water components are considered.
     # Fast crops/buildings are completely ignored.
     # ------------------------------------------------------------
     if request.analysis_mode == "standard":
         print(
-            "WATER SCOUT V3: running fast one-view "
-            "OpenEarthMap for water only"
+            "WATER SCOUT V3: reusing accurate inference "
+            "identity view for water only"
         )
 
-        fast_water_probabilities = run_inference(
-            image,
-            "fast",
-        )
+        if fast_water_probabilities is None:
+            raise RuntimeError(
+                "Standard analysis did not return its identity prediction."
+            )
 
         if (
             fast_water_probabilities.shape[:2]
@@ -2492,6 +2968,29 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
             water_rescue_v3_diagnostics
         )
 
+    # Every mode receives the same high-resolution visible-pond pass. It uses
+    # scene-adaptive Sentinel hotspots only to seed real Esri surface edges;
+    # accepted water is then a hard exclusion for crop polygon generation.
+    (
+        refined_water_mask,
+        water_confidence,
+        visible_pond_diagnostics,
+    ) = rescue_visible_ponds(
+        image=image,
+        probabilities=probabilities,
+        selected_mask=selected_mask,
+        building_mask=(
+            building_exclusion_mask
+            | semantic_building_exclusion_mask
+        ),
+        existing_water_mask=refined_water_mask,
+        existing_confidence=water_confidence,
+        sentinel_prior=sentinel_water_prior,
+    )
+    water_diagnostics["visible_pond_rescue"] = (
+        visible_pond_diagnostics
+    )
+
     class_masks["water"] = refined_water_mask
     detections["water"] = extract_regions(
         "water",
@@ -2500,10 +2999,10 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
         box,
         metres_per_pixel_x,
         metres_per_pixel_y,
-        # refine_water_mask already performs component-level model,
-        # Sentinel, tree and building checks. Do not reject an accepted pond
-        # a second time based on another mean-confidence threshold.
-        minimum_mean_confidence=None,
+        # Both water stages already perform component-level model, Sentinel,
+        # surface, tree, shape and building checks. Do not reject an accepted
+        # pond a second time using the generic semantic confidence floor.
+        minimum_mean_confidence=0.0,
     )
 
     # Building V2-A: Microsoft geometry is primary, while high-confidence

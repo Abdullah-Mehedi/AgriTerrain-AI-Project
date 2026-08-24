@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import httpx
 from PIL import Image
@@ -12,6 +14,8 @@ TILE_URL = (
     "https://server.arcgisonline.com/ArcGIS/rest/services/"
     "World_Imagery/MapServer/tile/{z}/{y}/{x}"
 )
+CACHE_DIR = Path(__file__).resolve().parent / ".cache" / "esri-imagery"
+MAX_TILE_WORKERS = 6
 
 
 def _world_pixel(longitude: float, latitude: float, zoom: int) -> tuple[float, float]:
@@ -45,6 +49,33 @@ def _choose_zoom(box: dict[str, float], output_size: int) -> int:
     return max(17, min(20, zoom))
 
 
+def _fetch_tile(
+    client: httpx.Client,
+    zoom: int,
+    tile_x: int,
+    tile_y: int,
+) -> Image.Image:
+    """Return an Esri tile, reusing the exact downloaded bytes when cached."""
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = CACHE_DIR / f"{zoom}-{tile_x}-{tile_y}.jpg"
+
+    if cache_path.is_file():
+        try:
+            return Image.open(cache_path).convert("RGB")
+        except (OSError, ValueError):
+            cache_path.unlink(missing_ok=True)
+
+    response = client.get(
+        TILE_URL.format(zoom=zoom, z=zoom, y=tile_y, x=tile_x)
+    )
+    response.raise_for_status()
+    content = response.content
+    tile = Image.open(io.BytesIO(content)).convert("RGB")
+    cache_path.write_bytes(content)
+    return tile
+
+
 def fetch_esri_world_imagery(
     box: dict[str, float],
     output_size: int = 512,
@@ -64,18 +95,32 @@ def fetch_esri_world_imagery(
     canvas = Image.new("RGB", (width_tiles * TILE_SIZE, height_tiles * TILE_SIZE))
     headers = {"User-Agent": "Mozilla/5.0 AgriTerrain-AI/1.0"}
 
+    tile_coordinates = [
+        (tile_x, tile_y)
+        for tile_y in range(tile_y_min, tile_y_max + 1)
+        for tile_x in range(tile_x_min, tile_x_max + 1)
+    ]
+
     with httpx.Client(
         timeout=30,
         follow_redirects=True,
         headers=headers,
     ) as client:
-        for tile_y in range(tile_y_min, tile_y_max + 1):
-            for tile_x in range(tile_x_min, tile_x_max + 1):
-                response = client.get(
-                    TILE_URL.format(zoom=zoom, z=zoom, y=tile_y, x=tile_x)
-                )
-                response.raise_for_status()
-                tile = Image.open(io.BytesIO(response.content)).convert("RGB")
+        worker_count = min(MAX_TILE_WORKERS, len(tile_coordinates))
+        with ThreadPoolExecutor(max_workers=max(worker_count, 1)) as executor:
+            futures = {
+                executor.submit(
+                    _fetch_tile,
+                    client,
+                    zoom,
+                    tile_x,
+                    tile_y,
+                ): (tile_x, tile_y)
+                for tile_x, tile_y in tile_coordinates
+            }
+            for future in as_completed(futures):
+                tile_x, tile_y = futures[future]
+                tile = future.result()
                 canvas.paste(
                     tile,
                     (
